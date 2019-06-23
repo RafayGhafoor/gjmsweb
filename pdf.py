@@ -51,6 +51,10 @@ class Article:
         if found:
             return found.group('volume'), found.group('issue')
 
+    def get_published_year(self, volume_number, start_year=2015):
+        '''Obtain published year of the article.'''
+        return start_year + (int(volume_number) - 1)
+
     def get_pages(self):
         '''
             Obtain pages range defined on the first page of the article. 
@@ -76,47 +80,43 @@ class Article:
 
 
 class TableGenerator:
-    
     ENDPOINTS = ('http://gjmsweb.com/archives/',
                  'http://gjmsweb.com/archives/Current Issue'
                  )
 
-    issue_range = {
+    ISSUE_RANGE = {
         1: "Jan-Mar",
         2: "Apr-Jun",
         3: "Jul-Sept",
         4: "Oct-Dec",
     }
 
-
     def __init__(self, meta_data: Article):
         self.title = meta_data.get_title()
         self.fn = meta_data.filename
         self.page_range = meta_data.get_pages()
         self.volume, self.issue = meta_data.get_vol_issue()
+        self.year = meta_data.get_published_year(self.volume)
 
+    def generate_header(self):
+        '''Produces header for the table.'''
+        return f"Vol {self.volume} - No. {self.issue} ({' - '.join(self.ISSUE_RANGE[int(self.issue)].split('-'))}, {self.year})"
 
     def generate_row(self, number, year=None, current_issue=False):
         '''
             Generate (html) row of table.
-            
+
             @args:
                 number: Number of article
-            
+
             @location:
         '''
-        if not year:
-            import datetime
-            year = datetime.datetime.today().year
-        
-        
         if current_issue:
             link = f'"http://gjmsweb.com/archives/Current Issue/{self.fn}"'
-        
+
         else:
-            link = f'"http://gjmsweb.com/archives/Volume {self.volume}/Issue {self.issue.zfill(2)}, {year}/{self.fn}"'
-            
-            
+            link = f'"http://gjmsweb.com/archives/{self.year}/Volume {self.volume}/Issue {self.issue.zfill(2)}, {self.year}/{self.fn}"'
+
         return f'''
         <tr>
         <td>{number}</td>
@@ -127,24 +127,24 @@ class TableGenerator:
         '''
 
 
+
 if __name__ == '__main__':
     util.config_tika()
     files = ["./test_files/" +
              i for i in os.listdir('./test_files') if i.endswith(".pdf")]
 
+    articles = []
+    
     for num, i in enumerate(files):
-        myarticle = Article(i)
-        vol, issue = myarticle.get_vol_issue()
-        print(
-            f"Name: {myarticle.filename}\nTitle: {myarticle.get_title()}\nPaging: {myarticle.get_pages()}\nVolume: {vol}\nIssue: {issue}\n\n")
+        articles.append(TableGenerator(Article(i)))
 
-    meta_data = {"paging": ""}
+    
+    for i in sorted(articles, key=util.fetch_articles_sorting_key):
+        print(i.page_range)
+        # generator = TableGenerator(myarticle)
+        # print(generator.generate_block_quote())
+        # print(generator.generate_row(num+1))
+        # input()
 
-    count = 0
-
-    for num, name in enumerate(files, 1):
-        article = Article(name)
-        if not article.get_vol_issue():
-            count += 1
-            print(name)
-            # print(f"FileName: {name}\nPaging: {info.get_pages()}\nVol: {info.get_vol_issue()}\n")
+        # vol, issue = myarticle.get_vol_issue()
+        # print(f"Name: {myarticle.filename}\nTitle: {myarticle.get_title()}\nPaging: {myarticle.get_pages()}\nVolume: {vol}\nIssue: {issue}\n\n")
