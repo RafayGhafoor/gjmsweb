@@ -93,7 +93,7 @@ class TableGenerator:
 
     def __init__(self, meta_data: Article):
         self.title = meta_data.get_title()
-        self.fn = meta_data.filename
+        self.filename = meta_data.filename
         self.page_range = meta_data.get_pages()
         self.volume, self.issue = meta_data.get_vol_issue()
         self.year = meta_data.get_published_year(self.volume)
@@ -112,15 +112,15 @@ class TableGenerator:
             @location:
         '''
         if current_issue:
-            link = f'"http://gjmsweb.com/archives/Current Issue/{self.fn}"'
+            link = f'"http://gjmsweb.com/archives/Current Issue/{self.filename}"'
 
         else:
-            link = f'"http://gjmsweb.com/archives/{self.year}/Volume {self.volume}/Issue {self.issue.zfill(2)}, {self.year}/{self.fn}"'
+            link = f'"http://gjmsweb.com/archives/{self.year}/Volume {self.volume}/Issue {self.issue.zfill(2)}, {self.year}/{self.filename}"'
 
         return f'''
         <tr>
         <td>{number}</td>
-        <td>{self.title}</td>
+        <td>{self.title} - {self.filename.split()[0]}</td>
         <td>{self.page_range}</td>
         <td><a href={link}>PDF</a></td>
         </tr>
@@ -135,12 +135,23 @@ if __name__ == '__main__':
 
     articles = []
     
-    for num, i in enumerate(files):
+    for i in files:
         articles.append(TableGenerator(Article(i)))
 
+    issue_cache = 0
+    index = 1
     
     for i in sorted(articles, key=util.fetch_articles_sorting_key):
-        print(i.page_range)
+        if not issue_cache:
+            issue_cache = i.issue
+        
+        elif issue_cache != i.issue:
+            issue_cache = i.issue
+            index = 1
+        
+        print(i.generate_row(index))
+        index += 1
+        
         # generator = TableGenerator(myarticle)
         # print(generator.generate_block_quote())
         # print(generator.generate_row(num+1))
