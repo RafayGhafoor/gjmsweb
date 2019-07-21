@@ -33,6 +33,15 @@ class Article:
 
     # {found} contains the pattern that are matched to extract information from article
     # which are unable to be retrieved through file's meta_data
+    
+    def get_authors(self):
+        word = "abstract"
+        splitter = (word.upper(), word.capitalize())
+        content_till_abstract = [self.text.split(abstract)[0].strip() for abstract in splitter if abstract in self.text][0]
+        if not content_till_abstract:
+            raise Exception(f"Author not found for: {self.filename}.")
+        return [i.strip()[:-1] for i in content_till_abstract.split('\n')[-1].split(',')]
+        
 
     def get_vol_issue(self):
         '''
@@ -79,10 +88,7 @@ class Article:
         return titlecase(pdftitle.extract_title(self.path))
 
 
-class TableGenerator:
-    ENDPOINTS = ('http://gjmsweb.com/archives/',
-                 'http://gjmsweb.com/archives/Current Issue'
-                 )
+class TableHandler:
 
     ISSUE_RANGE = {
         1: "Jan-Mar",
@@ -91,12 +97,20 @@ class TableGenerator:
         4: "Oct-Dec",
     }
 
-    def __init__(self, meta_data: Article):
+    def __init__(self, meta_data: Article, endpoint='archives.php'):
         self.title = meta_data.get_title()
         self.filename = meta_data.filename
         self.page_range = meta_data.get_pages()
         self.volume, self.issue = meta_data.get_vol_issue()
         self.year = meta_data.get_published_year(self.volume)
+        self.authors = meta_data.get_authors()
+        self.endpoint = open(endpoint, 'r+')
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        self.endpoint.close()
 
     def generate_header(self):
         '''Produces header for the table.'''
@@ -115,17 +129,32 @@ class TableGenerator:
             link = f'"http://gjmsweb.com/archives/Current Issue/{self.filename}"'
 
         else:
-            link = f'"http://gjmsweb.com/archives/{self.year}/Volume {self.volume}/Issue {self.issue.zfill(2)}, {self.year}/{self.filename}"'
+            link = f'"http://gjmsweb.com/archives/{self.year}/Volume {self.volume}/Issue {self.issue}, {self.year}/{self.filename}"'
 
         return f'''
         <tr>
         <td>{number}</td>
-        <td>{self.title} - {self.filename.split()[0]}</td>
+        <td>{self.title} - {self.filter_author()[0]}</td>
         <td>{self.page_range}</td>
         <td><a href={link}>PDF</a></td>
         </tr>
         '''
+        
+    def filter_author(self, key="Abdul Ghafoor"):
+        return [author for author in self.authors if key not in author]
+        
 
+    def add_section(self):
+        blockquote = self.generate_header()
+        soup_obj = util.create_soup(self.endpoint)
+        last_table = util.get_last_volume(soup_obj)
+        last_table.append(util.get_template(blockquote))
+        print(soup_obj.prettify(formatter=None))
+        # self.endpoint.write(soup_obj)
+
+    def add_article(self):
+        # Raise exception when the section doesn't exist
+        pass
 
 
 if __name__ == '__main__':
@@ -134,28 +163,31 @@ if __name__ == '__main__':
              i for i in os.listdir('./test_files') if i.endswith(".pdf")]
 
     articles = []
-    
+
+
+
     for i in files:
-        articles.append(TableGenerator(Article(i)))
+        articles.append(TableHandler(Article(i)))
 
     issue_cache = 0
     index = 1
-    
-    for i in sorted(articles, key=util.fetch_articles_sorting_key):
+
+    for i in sorted(articles, key=util.fetch_articles_sorting_key): 
         if not issue_cache:
             issue_cache = i.issue
-        
+
         elif issue_cache != i.issue:
             issue_cache = i.issue
             index = 1
-        
+
         print(i.generate_row(index))
         index += 1
-        
-        # generator = TableGenerator(myarticle)
+
+
+    # SEPARATE
+        # generator = TableHandler(i)
         # print(generator.generate_block_quote())
         # print(generator.generate_row(num+1))
-        # input()
 
         # vol, issue = myarticle.get_vol_issue()
         # print(f"Name: {myarticle.filename}\nTitle: {myarticle.get_title()}\nPaging: {myarticle.get_pages()}\nVolume: {vol}\nIssue: {issue}\n\n")
