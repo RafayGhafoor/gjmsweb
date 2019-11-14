@@ -10,6 +10,7 @@ import sys
 from io import StringIO
 
 import xml.etree.ElementTree as etree
+from bs4 import BeautifulSoup
 
 
 def parse_xml(s):
@@ -30,6 +31,11 @@ class CONFIG:
         self.max_length = max_length
         self.debug = debug
 
+def replaceAll(text, lst=('<html>', '</html>', '<body>', '</body>')):
+    for i in lst:
+        text = text.replace(i, '')
+    return text
+
 
 def convert_pdf_to_xml(path):
     """Return XML string of converted PDF file."""
@@ -38,8 +44,12 @@ def convert_pdf_to_xml(path):
     # https://stackoverflow.com/questions/15374211/why-does-popen-communicate-return-bhi-n-instead-of-hi
     xml_string = subprocess.check_output(
         cmd, stderr=open(os.devnull, 'w'), universal_newlines=True)
-    # print(StringIO(remove_control_chars(xml_string)))
-    return parse_xml(StringIO(remove_control_chars(xml_string)))
+    soup = BeautifulSoup(xml_string, 'lxml')
+    text = replaceAll(str(soup))
+    return parse_xml(StringIO(remove_control_chars(text)))
+
+    # return parse_xml(StringIO(xml_string))
+    # return parse_xml(StringIO(remove_control_chars(xml_string)))
 
 
 def remove_control_chars(string):
@@ -49,22 +59,22 @@ def remove_control_chars(string):
 
 def font_specs(xml_data):
     """Return all font specifications in XML."""
-    xml_font_specs = xml_data.findall('page[@number="1"]/fontspec[@id][@size]')
+    xml_font_specs=xml_data.findall('page[@number="1"]/fontspec[@id][@size]')
     return [fs.attrib for fs in xml_font_specs]
 
 
 def sorted_font_ids(font_specs):
     """Return sorted font specifications by size decending."""
-    font_specs = sorted(font_specs, key=lambda x: int(x['size']), reverse=True)
+    font_specs=sorted(font_specs, key=lambda x: int(x['size']), reverse=True)
     return [fs['id'] for fs in font_specs]
 
 
 def textblocks_by_id(xml_data, font_id):
     """Return text blocks given font id."""
-    text_elements = xml_data.findall(
+    text_elements=xml_data.findall(
         'page[@number="1"]/text[@font="%s"]' % font_id)
-    first_page_top = int(xml_data.findall('page[@number="1"]')[0].get('top'))
-    first_page_height = int(xml_data.findall(
+    first_page_top=int(xml_data.findall('page[@number="1"]')[0].get('top'))
+    first_page_height=int(xml_data.findall(
         'page[@number="1"]')[0].get('height'))
     return top_and_texts(text_elements, first_page_top, first_page_height)
 
@@ -82,23 +92,23 @@ def top_and_texts(text_elements, page_top, page_height):
         {'top': 44, 'height': 24, 'text': 'baz'}
       ]
     }"""
-    text_lines = []
-    top = page_top
+    text_lines=[]
+    top=page_top
 
     for text_element in text_elements:
-        text_line = unformat_and_strip(text_element)
+        text_line=unformat_and_strip(text_element)
         if not text_line:
             continue
-        t = int(text_element.get('top'))
-        h = int(text_element.get('height'))
-        w = int(text_element.get('width'))
+        t=int(text_element.get('top'))
+        h=int(text_element.get('height'))
+        w=int(text_element.get('width'))
         # TODO: Maybe allow a light error here
         # if T < Top - Error:
         # TODO: This is actually a filter
         if t < top:
             # Ignore text lines positioned upwards. Only look downwards.
             continue
-        top = t
+        top=t
         text_lines.append({
             'top': t,
             'height': h,
@@ -140,10 +150,10 @@ def filter_margin(text_blocks, config):
 
 def filter_vertical(text_blocks, _config):
     """Filter text blocks with vertical text."""
-    new_text_blocks = []
+    new_text_blocks=[]
     for tb in text_blocks:
-        new_tb = copy.copy(tb)
-        new_tb['blockText'] = []
+        new_tb=copy.copy(tb)
+        new_tb['blockText']=[]
         for t in tb['blockText']:
             if t['width'] > 0:
                 new_tb['blockText'].append(t)
@@ -167,14 +177,14 @@ def filter_longs(text_blocks, config):
 def filter_unrelated_lines(text_blocks, _config):
     """Filter text lines in text blocks that are too far away from previous
     lines."""
-    new_text_blocks = []
+    new_text_blocks=[]
     for tb in text_blocks:
-        new_tb = copy.copy(tb)
-        new_tb['blockText'] = []
-        next_top = tb['blockTop']
+        new_tb=copy.copy(tb)
+        new_tb['blockText']=[]
+        next_top=tb['blockTop']
         for t in tb['blockText']:
             if t['top'] < next_top + t['height'] / 2:
-                next_top = t['top'] + t['height']
+                next_top=t['top'] + t['height']
                 new_tb['blockText'].append(t)
         if new_tb['blockText']:
             new_text_blocks.append(new_tb)
@@ -200,10 +210,10 @@ def format_upper_case(title, _config):
 
 def is_mostly_upper_case(string, threshold=0.67):
     """Return True if string has over Threshold uppercase letters, else False."""
-    n = 0
+    n=0
     for c in string:
         if c.isupper() or c.isspace():
-            n = n+1
+            n=n+1
     if float(n) / len(string) >= threshold:
         return True
     else:
@@ -237,10 +247,10 @@ def format_space_case(title, _config):
 def is_space_case(string, threshold=0.2):
     """Return True if given String has many gaps between letters, else False.
     Example: isSpaceCase('A H i gh - L e ve l F r am e w or k f or') == True"""
-    n = 0
+    n=0
     for c in string:
         if c.isspace():
-            n = n+1
+            n=n+1
     if float(n) / len(string) >= threshold:
         return True
     else:
@@ -250,7 +260,7 @@ def is_space_case(string, threshold=0.2):
 def unspace(string):
     """Return the given string without the many gaps between letters.
     Example: unspace('A H i gh - L e ve l F r am e') == A High-Level Frame"""
-    joined_string = ''.join(string.split())
+    joined_string=''.join(string.split())
     return re.sub(r'([^-])([A-Z])', r'\1 \2', joined_string)
 
 
@@ -288,7 +298,7 @@ def format_ligatures(title, _config):
     """Return the title without Ligatures."""
     # For a reference of the list see: http://typophile.com/files/PMEJLigR_6061.GIF
     # and https://github.com/Docear/PDF-Inspector/blob/master/src/org/docear/pdf/util/ReplaceLigaturesFilter.java
-    title = str(title.decode('utf-8'))
+    title=str(title.decode('utf-8'))
     return title.replace('ﬁ', 'fi') \
                 .replace('ﬂ', 'fl')
 
@@ -303,11 +313,11 @@ def transduce(funs, value, config):
 
 def extract_title(path):
     """Return title in PDF article after applying rules and filters."""
-    config = CONFIG(filename=path)
+    config=CONFIG(filename=path)
 
-    groupers = [
+    groupers=[
     ]
-    filters = [
+    filters=[
         filter_empties,
         filter_bottom_half,
         filter_margin,
@@ -317,7 +327,7 @@ def extract_title(path):
         filter_unrelated_lines,
         choose_title
     ]
-    formatters = [
+    formatters=[
         format_ligatures,
         format_upper_case,
         format_weird_case,
@@ -328,9 +338,9 @@ def extract_title(path):
         format_trailing_asterik,
         format_quotes
     ]
-    xml_data = convert_pdf_to_xml(path)
-    font_ids = sorted_font_ids(font_specs(xml_data))
-    text_blocks = [textblocks_by_id(xml_data, font_id) for font_id in font_ids]
+    xml_data=convert_pdf_to_xml(path)
+    font_ids=sorted_font_ids(font_specs(xml_data))
+    text_blocks=[textblocks_by_id(xml_data, font_id) for font_id in font_ids]
     return transduce(groupers + filters + formatters, text_blocks, config)
 
 
@@ -339,14 +349,14 @@ def sanitize_filename(filename):
 
 
 def pos_int(v):
-    i = int(v)
+    i=int(v)
     if i > 0:
         return i
     raise argparse.ArgumentTypeError("invalid pos_int value: " % v)
 
 
 def filepath(v):
-    f = os.path.expanduser(v.strip())
+    f=os.path.expanduser(v.strip())
     if not os.path.isfile(f) and not os.path.islink(f):
         raise argparse.ArgumentTypeError("file not found: " % v)
     return f

@@ -33,15 +33,15 @@ class Article:
 
     # {found} contains the pattern that are matched to extract information from article
     # which are unable to be retrieved through file's meta_data
-    
+
     def get_authors(self):
         word = "abstract"
         splitter = (word.upper(), word.capitalize())
-        content_till_abstract = [self.text.split(abstract)[0].strip() for abstract in splitter if abstract in self.text][0]
+        content_till_abstract = [self.text.split(abstract)[0].strip(
+        ) for abstract in splitter if abstract in self.text]
         if not content_till_abstract:
             raise Exception(f"Author not found for: {self.filename}.")
-        return [i.strip()[:-1] for i in content_till_abstract.split('\n')[-1].split(',')]
-        
+        return [i.strip()[:-1] for i in content_till_abstract[0].split('\n')[-1].split(',')]
 
     def get_vol_issue(self):
         '''
@@ -73,7 +73,7 @@ class Article:
                 eg: 12-34
         '''
         found = re.search(
-            r'pp(\s?)+[.](\s?)+(?P<paging>(\d\s?)+[-.]+(\s?\d)+)', self.text)
+            r'(pp|PP)(\s?)+[.](\s?)+(?P<paging>(\d\s?)+[-.]+(\s?\d)+)', self.text)
 
         if found:
             return util.sanitize_page(found.group("paging").replace('\n', ''))
@@ -85,7 +85,8 @@ class Article:
             @returns:
                 title (string): Normalized Title extracted from the article. 
         '''
-        return titlecase(pdftitle.extract_title(self.path))
+        return pdftitle.extract_title(self.path)
+        # return titlecase(pdftitle.extract_title(self.path))
 
 
 class TableHandler:
@@ -116,7 +117,7 @@ class TableHandler:
         '''Produces header for the table.'''
         return f"Vol {self.volume} - No. {self.issue} ({' - '.join(self.ISSUE_RANGE[int(self.issue)].split('-'))}, {self.year})"
 
-    def generate_row(self, number, year=None, current_issue=False):
+    def generate_row(self, number, year=None):
         '''
             Generate (html) row of table.
 
@@ -125,11 +126,7 @@ class TableHandler:
 
             @location:
         '''
-        if current_issue:
-            link = f'"http://gjmsweb.com/archives/Current Issue/{self.filename}"'
-
-        else:
-            link = f'"http://gjmsweb.com/archives/{self.year}/Volume {self.volume}/Issue {self.issue}, {self.year}/{self.filename}"'
+        link = f'"http://gjmsweb.com/archives/{self.year}/Volume {self.volume}/Issue {self.issue}, {self.year}/{self.filename}"'
 
         return f'''
         <tr>
@@ -139,10 +136,9 @@ class TableHandler:
         <td><a href={link}>PDF</a></td>
         </tr>
         '''
-        
+
     def filter_author(self, key="Abdul Ghafoor"):
         return [author for author in self.authors if key not in author]
-        
 
     def add_section(self):
         blockquote = self.generate_header()
@@ -164,15 +160,16 @@ if __name__ == '__main__':
 
     articles = []
 
-
-
     for i in files:
-        articles.append(TableHandler(Article(i)))
+        try:
+            articles.append(TableHandler(Article(i)))
+        except Exception as e:
+            print(e)
 
     issue_cache = 0
     index = 1
 
-    for i in sorted(articles, key=util.fetch_articles_sorting_key): 
+    for i in sorted(articles, key=util.fetch_articles_sorting_key):
         if not issue_cache:
             issue_cache = i.issue
 
@@ -182,7 +179,6 @@ if __name__ == '__main__':
 
         print(i.generate_row(index))
         index += 1
-
 
     # SEPARATE
         # generator = TableHandler(i)
