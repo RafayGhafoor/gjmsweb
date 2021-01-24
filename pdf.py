@@ -29,8 +29,8 @@ class Article:
                 f"Unable to parse pdf file. {self.pdf['status']} returned.")
 
         self.text = self.pdf['content']
-        self.filename = self.pdf['metadata']['resourceName']
-
+        self.filename = os.path.basename(path)
+        
     # {found} contains the pattern that are matched to extract information from article
     # which are unable to be retrieved through file's meta_data
 
@@ -39,9 +39,12 @@ class Article:
         splitter = (word.upper(), word.capitalize())
         content_till_abstract = [self.text.split(abstract)[0].strip(
         ) for abstract in splitter if abstract in self.text]
+        
         if not content_till_abstract:
             raise Exception(f"Author not found for: {self.filename}.")
-        return [i.strip()[:-1] for i in content_till_abstract[0].split('\n')[-1].split(',')]
+
+        
+        return [i.strip() for i in re.compile(r'\d').split(content_till_abstract[0].split('\n')[-1])]
 
     def get_vol_issue(self):
         '''
@@ -138,7 +141,7 @@ class TableHandler:
         '''
 
     def filter_author(self, key="Abdul Ghafoor"):
-        return [author for author in self.authors if key not in author]
+        return [author.replace(',', '').strip() for author in self.authors if key not in author]
 
     def add_section(self):
         blockquote = self.generate_header()
@@ -151,7 +154,6 @@ class TableHandler:
     def add_article(self):
         # Raise exception when the section doesn't exist
         pass
-
 
 if __name__ == '__main__':
     util.config_tika()
