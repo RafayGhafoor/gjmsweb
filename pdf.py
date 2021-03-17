@@ -41,7 +41,8 @@ class Article:
         ) for abstract in splitter if abstract in self.text]
         
         if not content_till_abstract:
-            raise Exception(f"Author not found for: {self.filename}.")
+            return [""]
+            # raise Exception(f"Author not found for: {self.filename}.")
 
         
         return [i.strip() for i in re.compile(r'\d').split(content_till_abstract[0].split('\n')[-1])]
@@ -88,7 +89,7 @@ class Article:
             @returns:
                 title (string): Normalized Title extracted from the article. 
         '''
-        return pdftitle.extract_title(self.path)
+        return titlecase(pdftitle.extract_title(self.path))
         # return titlecase(pdftitle.extract_title(self.path))
 
 
