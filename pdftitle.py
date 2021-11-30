@@ -196,7 +196,9 @@ def choose_title(text_blocks, config):
     or just first."""
     # Have to encode output when piping script. See: http://goo.gl/h0ql0
     for tb in text_blocks:
+        if 'Open Access' in ' '.join([t['text'] for t in tb['blockText']]).encode('utf-8').decode(): continue
         if config.multiline:
+            # print(' '.join([t['text'] for t in tb['blockText']]).encode('utf-8'))
             return ' '.join([t['text'] for t in tb['blockText']]).encode('utf-8')
         else:
             return tb['blockText'][0]['text'].encode('utf-8')

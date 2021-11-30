@@ -18,6 +18,7 @@ class Article:
             text = text read from file through parser (pdf)
             filename = Name of file
     '''
+    AUTHOR_STOP_WORDS = ['research', 'paper', '.pdf', 'revised']
 
     def __init__(self, path):
         self.path = path
@@ -30,7 +31,10 @@ class Article:
 
         self.text = self.pdf['content']
         self.filename = os.path.basename(path)
-        
+
+    def get_author_fn(self):
+        return " ".join([i for i in re.split('(\s|\-)', self.filename) if i.isalpha() and i not in self.AUTHOR_STOP_WORDS])
+
     # {found} contains the pattern that are matched to extract information from article
     # which are unable to be retrieved through file's meta_data
 
@@ -39,12 +43,11 @@ class Article:
         splitter = (word.upper(), word.capitalize())
         content_till_abstract = [self.text.split(abstract)[0].strip(
         ) for abstract in splitter if abstract in self.text]
-        
+
         if not content_till_abstract:
             return [""]
             # raise Exception(f"Author not found for: {self.filename}.")
 
-        
         return [i.strip() for i in re.compile(r'\d').split(content_till_abstract[0].split('\n')[-1])]
 
     def get_vol_issue(self):
@@ -108,7 +111,7 @@ class TableHandler:
         self.page_range = meta_data.get_pages()
         self.volume, self.issue = meta_data.get_vol_issue()
         self.year = meta_data.get_published_year(self.volume)
-        self.authors = meta_data.get_authors()
+        self.authors = meta_data.get_author_fn()
         self.endpoint = open(endpoint, 'r+')
 
     def __enter__(self):
@@ -135,7 +138,7 @@ class TableHandler:
         return f'''
         <tr>
         <td>{number}</td>
-        <td>{self.title} - {self.filter_author()[0]}</td>
+        <td>{self.title} - {self.authors}</td>
         <td>{self.page_range}</td>
         <td><a href={link}>PDF</a></td>
         </tr>
@@ -155,6 +158,7 @@ class TableHandler:
     def add_article(self):
         # Raise exception when the section doesn't exist
         pass
+
 
 if __name__ == '__main__':
     util.config_tika()
