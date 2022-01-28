@@ -80,7 +80,7 @@ class Article:
                 eg: 12-34
         '''
         found = re.search(
-            r'(pp|PP)(\s?)+[.](\s?)+(?P<paging>(\d\s?)+[-.]+(\s?\d)+)', self.text)
+            r'(pp|PP)(\s?)+[.,](\s?)+-?(?P<paging>(\d\s?)+[-.]+(\s?\d)+)', self.text)
 
         if found:
             return util.sanitize_page(found.group("paging").replace('\n', ''))
@@ -177,15 +177,18 @@ if __name__ == '__main__':
     index = 1
 
     for i in sorted(articles, key=util.fetch_articles_sorting_key):
-        if not issue_cache:
-            issue_cache = i.issue
+        try:
+            if not issue_cache:
+                issue_cache = i.issue
 
-        elif issue_cache != i.issue:
-            issue_cache = i.issue
-            index = 1
+            elif issue_cache != i.issue:
+                issue_cache = i.issue
+                index = 1
 
-        print(i.generate_row(index))
-        index += 1
+            print(i.generate_row(index))
+            index += 1
+        except Exception as e:
+            print(e)
 
     # SEPARATE
         # generator = TableHandler(i)

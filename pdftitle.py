@@ -190,13 +190,19 @@ def filter_unrelated_lines(text_blocks, _config):
             new_text_blocks.append(new_tb)
     return new_text_blocks
 
+def my_filter(text):
+    keywords = ['Open Access', "Global Journal", '____', 'figshare']
+    for i in keywords:
+        if i in text:
+            return True
 
 def choose_title(text_blocks, config):
     """Return title as UTF-8 from list. Either all non-empty texts with font id
     or just first."""
     # Have to encode output when piping script. See: http://goo.gl/h0ql0
     for tb in text_blocks:
-        if 'Open Access' in ' '.join([t['text'] for t in tb['blockText']]).encode('utf-8').decode(): continue
+        text = ' '.join([t['text'] for t in tb['blockText']]).encode('utf-8').decode()
+        if my_filter(text) or ' ' not in text: continue
         if config.multiline:
             # print(' '.join([t['text'] for t in tb['blockText']]).encode('utf-8'))
             return ' '.join([t['text'] for t in tb['blockText']]).encode('utf-8')
@@ -319,6 +325,7 @@ def extract_title(path):
 
     groupers=[
     ]
+
     filters=[
         filter_empties,
         filter_bottom_half,
@@ -329,6 +336,7 @@ def extract_title(path):
         filter_unrelated_lines,
         choose_title
     ]
+
     formatters=[
         format_ligatures,
         format_upper_case,
@@ -340,6 +348,7 @@ def extract_title(path):
         format_trailing_asterik,
         format_quotes
     ]
+
     xml_data=convert_pdf_to_xml(path)
     font_ids=sorted_font_ids(font_specs(xml_data))
     text_blocks=[textblocks_by_id(xml_data, font_id) for font_id in font_ids]
