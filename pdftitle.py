@@ -44,7 +44,7 @@ def convert_pdf_to_xml(path):
     # https://stackoverflow.com/questions/15374211/why-does-popen-communicate-return-bhi-n-instead-of-hi
     xml_string = subprocess.check_output(
         cmd, stderr=open(os.devnull, 'w'), universal_newlines=True)
-    soup = BeautifulSoup(xml_string, 'lxml')
+    soup = BeautifulSoup(xml_string, 'xml')
     text = replaceAll(str(soup))
     return parse_xml(StringIO(remove_control_chars(text)))
 

@@ -74,7 +74,6 @@ def fetch_articles_sorting_key(article: list):
             sorted(articles, key=util.fetch_articles_sorting_key)
         ```
     '''
-
     return int(article.page_range.split('-')[0])
 
 

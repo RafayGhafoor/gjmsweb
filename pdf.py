@@ -80,7 +80,7 @@ class Article:
                 eg: 12-34
         '''
         found = re.search(
-            r'(pp|PP)(\s?)+[.,](\s?)+-?(?P<paging>(\d\s?)+[-.]+(\s?\d)+)', self.text)
+            r'(pp|PP)(\s?)+[.,]?(\s?)+-?(?P<paging>(\d\s?)+[-.]+(\s?\d)+)', self.text)
 
         if found:
             return util.sanitize_page(found.group("paging").replace('\n', ''))
