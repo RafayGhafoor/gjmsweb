@@ -40,10 +40,11 @@ def replaceAll(text, lst=('<html>', '</html>', '<body>', '</body>')):
 def convert_pdf_to_xml(path):
     """Return XML string of converted PDF file."""
     cmd = ['pdftohtml', '-xml', '-f', '1', '-l', '1',
-           '-i', '-q', '-nodrm', '-hidden', '-stdout', path]
+           '-i', '-q', '-hidden', '-stdout', path]
     # https://stackoverflow.com/questions/15374211/why-does-popen-communicate-return-bhi-n-instead-of-hi
     xml_string = subprocess.check_output(
-        cmd, stderr=open(os.devnull, 'w'), universal_newlines=True)
+        cmd, stderr=open(os.devnull, 'w'), universal_newlines=True, encoding='utf8', errors='ignore')
+    
     soup = BeautifulSoup(xml_string, 'xml')
     text = replaceAll(str(soup))
     return parse_xml(StringIO(remove_control_chars(text)))
@@ -191,9 +192,9 @@ def filter_unrelated_lines(text_blocks, _config):
     return new_text_blocks
 
 def my_filter(text):
-    keywords = ['Open Access', "Global Journal", '____', 'figshare']
+    keywords = ['Open Access', "Global Journal", '____', 'figshare', "Impact factor",  "research article", "original article"]
     for i in keywords:
-        if i in text:
+        if i.lower() in text.lower():
             return True
 
 def choose_title(text_blocks, config):
@@ -207,6 +208,7 @@ def choose_title(text_blocks, config):
             # print(' '.join([t['text'] for t in tb['blockText']]).encode('utf-8'))
             return ' '.join([t['text'] for t in tb['blockText']]).encode('utf-8')
         else:
+            print("here")
             return tb['blockText'][0]['text'].encode('utf-8')
     return None
 

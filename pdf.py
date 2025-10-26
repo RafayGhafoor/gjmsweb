@@ -1,3 +1,4 @@
+import title_extractor
 import re
 import os
 
@@ -6,7 +7,7 @@ from titlecase import titlecase
 
 import util
 import pdftitle
-
+import traceback
 
 class Article:
     '''
@@ -37,7 +38,7 @@ class Article:
 
     # {found} contains the pattern that are matched to extract information from article
     # which are unable to be retrieved through file's meta_data
-
+        
     def get_authors(self):
         word = "abstract"
         splitter = (word.upper(), word.capitalize())
@@ -48,7 +49,7 @@ class Article:
             return [""]
             # raise Exception(f"Author not found for: {self.filename}.")
 
-        return [i.strip() for i in re.compile(r'\d').split(content_till_abstract[0].split('\n')[-1])]
+        return " ".join([i.strip() for i in re.compile(r'\d').split(content_till_abstract[0].split('\n')[-1])])
 
     def get_vol_issue(self):
         '''
@@ -92,7 +93,9 @@ class Article:
             @returns:
                 title (string): Normalized Title extracted from the article. 
         '''
-        return titlecase(pdftitle.extract_title(self.path))
+        title = title_extractor.get_title(self.path)
+        # title = pdftitle.extract_title(self.path)
+        return titlecase(title)
         # return titlecase(pdftitle.extract_title(self.path))
 
 
@@ -133,14 +136,14 @@ class TableHandler:
 
             @location:
         '''
-        link = f'"http://gjmsweb.com/archives/{self.year}/Volume {self.volume}/Issue {self.issue}, {self.year}/{self.filename}"'
+        link = f'"http://gjms.b-cdn.net/{self.year}/Volume {self.volume}/Issue {self.issue}, {self.year}/{self.filename}"'
 
         return f'''
         <tr>
         <td>{number}</td>
-        <td>{self.title} - {self.authors}</td>
+        <td>{self.title}</td>
         <td>{self.page_range}</td>
-        <td><a href={link}>PDF</a></td>
+        <td><a class="font-medium text-blue-600 dark:text-blue-500 hover:underline" href={link}>PDF</a></td>
         </tr>
         '''
 
@@ -159,8 +162,7 @@ class TableHandler:
         # Raise exception when the section doesn't exist
         pass
 
-
-if __name__ == '__main__':
+def main():
     util.config_tika()
     files = ["./test_files/" +
              i for i in os.listdir('./test_files') if i.endswith(".pdf")]
@@ -171,10 +173,15 @@ if __name__ == '__main__':
         try:
             articles.append(TableHandler(Article(i)))
         except Exception as e:
-            print(e)
+            print(traceback.format_exc())
+            print(i)
+
 
     issue_cache = 0
     index = 1
+    output = []
+    volume = None
+    issue = None
 
     for i in sorted(articles, key=util.fetch_articles_sorting_key):
         try:
@@ -184,11 +191,20 @@ if __name__ == '__main__':
             elif issue_cache != i.issue:
                 issue_cache = i.issue
                 index = 1
-
-            print(i.generate_row(index))
+            if not volume:
+                volume = i.volume
+                issue = i.issue
+            output.append(i.generate_row(index))
             index += 1
         except Exception as e:
             print(e)
+    
+    result = "\n".join(output)
+    print(result)
+    return result, volume, issue
+
+if __name__ == '__main__':
+    main()
 
     # SEPARATE
         # generator = TableHandler(i)
