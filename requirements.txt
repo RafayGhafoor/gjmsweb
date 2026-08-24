@@ -2,3 +2,8 @@ requests
 beautifulsoup4
 tika
 titlecase
+opendataloader-pdf
+pyftpdlib
+rich
+PyMuPDF
+ocrmac
