@@ -141,6 +141,16 @@ top-level archive issue, commits the JSON, and pushes `main`. Use
 `--dry-run` to preview metadata and destinations without changing Bunny or
 GitHub.
 
+To verify all archive PDF links without downloading complete PDFs:
+
+```bash
+python gjms-automation/verify_links.py
+```
+
+The checker encodes spaces and other path characters, uses concurrent HEAD
+requests, and falls back to a one-byte ranged request when HEAD is unsupported.
+If Bunny rate-limits requests, run it with `--workers 1 --delay 1`.
+
 ## Refreshing the Bunny mirror
 
 To download the complete remote tree locally:

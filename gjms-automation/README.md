@@ -24,6 +24,18 @@ Preview Bunny destinations without uploading:
 python gjms-automation/upload_articles.py --dry-run
 ```
 
+Verify every frontend PDF link without downloading the complete files:
+
+```bash
+python gjms-automation/verify_links.py
+```
+
+For a rate-limited check, use one worker and a one-second delay:
+
+```bash
+python gjms-automation/verify_links.py --workers 1 --delay 1
+```
+
 Upload PDFs to the Bunny Storage layout
 `<year>/Volume <volume>/Issue <issue>, <year>/<filename>`:
 
