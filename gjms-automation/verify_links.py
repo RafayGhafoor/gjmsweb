@@ -10,7 +10,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
@@ -112,12 +112,20 @@ def verify(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TextColumn("{task.completed}/{task.total}"),
+            TextColumn("[cyan]{task.fields[current]:<44}[/cyan]"),
             TimeRemainingColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task("Checking archive links", total=len(futures))
+            task = progress.add_task(
+                "Checking archive links", total=len(futures), current=""
+            )
             for future in as_completed(futures):
-                results.append(future.result())
+                result = future.result()
+                results.append(result)
+                progress.update(
+                    task,
+                    current=unquote(urlsplit(result.link.url).path).rsplit("/", 1)[-1][:44],
+                )
                 progress.advance(task)
     return sorted(results, key=lambda result: result.link.url.casefold())
 

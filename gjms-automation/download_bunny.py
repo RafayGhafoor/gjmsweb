@@ -155,12 +155,14 @@ def download_all(destination: Path, env_file: Path) -> None:
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
+                TextColumn("[cyan]{task.fields[current]:<44}[/cyan]"),
                 TimeElapsedColumn(),
                 console=console,
             ) as progress:
                 task = progress.add_task(
                     f"Creating aria2 manifest ({len(pending_files)} files)",
                     total=len(pending_files),
+                    current="",
                 )
                 for remote_file in pending_files:
                     local_path = destination / Path(remote_file.path)
@@ -170,6 +172,9 @@ def download_all(destination: Path, env_file: Path) -> None:
                     url_path = quote(remote_file.path, safe="/")
                     output.write(f"ftp://{host}:{port}/{url_path}\n")
                     output.write(f"  out={remote_file.path}\n")
+                    progress.update(
+                        task, current=Path(remote_file.path).name[:44]
+                    )
                     progress.advance(task)
 
         config.write_text(

@@ -3,3 +3,7 @@ bunny-content
 __pycache__
 *.jar*
 .env
+.DS_Store
+
+# Generated analysis output (regenerate with scripts/evaluate_metadata_accuracy.py)
+scripts/reports/

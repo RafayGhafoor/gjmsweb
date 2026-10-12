@@ -209,16 +209,18 @@ def extract_articles(folder: Path) -> list[dict[str, object]]:
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TextColumn("{task.completed}/{task.total}"),
+            TextColumn("[cyan]{task.fields[current]:<44}[/cyan]"),
             TimeRemainingColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task("Parsing PDFs", total=len(futures))
+            task = progress.add_task("Parsing PDFs", total=len(futures), current="")
             for future in as_completed(futures):
                 pdf_path = futures[future]
                 try:
                     records.append(future.result())
                 except Exception as error:
                     failures.append((pdf_path, error))
+                progress.update(task, current=pdf_path.name[:44])
                 progress.advance(task)
 
     for pdf_path, error in failures:

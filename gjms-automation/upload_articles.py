@@ -9,7 +9,13 @@ import tempfile
 from ftplib import FTP, error_perm
 from pathlib import Path
 
+from rich.console import Console
+from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
+
 from extract_articles import extract_first_page_text, parse_article
+
+
+console = Console()
 
 
 VOLUME_ISSUE_YEAR_PATTERN = re.compile(
@@ -65,11 +71,24 @@ def upload_articles(folder: Path, env_file: Path, dry_run: bool = False) -> None
         raise FileNotFoundError(f"No PDF files found in {folder}")
 
     destinations = []
-    for pdf_path in pdf_paths:
-        with tempfile.TemporaryDirectory(prefix="opendataloader-") as temporary_dir:
-            text = extract_first_page_text(pdf_path, Path(temporary_dir))
-        year, volume, issue = article_destination(text)
-        destinations.append((pdf_path, year, volume, issue))
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TextColumn("[cyan]{task.fields[current]:<44}[/cyan]"),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task(
+            "Reading destinations", total=len(pdf_paths), current=""
+        )
+        for pdf_path in pdf_paths:
+            with tempfile.TemporaryDirectory(prefix="opendataloader-") as temporary_dir:
+                text = extract_first_page_text(pdf_path, Path(temporary_dir))
+            year, volume, issue = article_destination(text)
+            destinations.append((pdf_path, year, volume, issue))
+            progress.update(task, current=pdf_path.name[:44])
+            progress.advance(task)
 
     if dry_run:
         for pdf_path, year, volume, issue in destinations:
@@ -89,15 +108,37 @@ def upload_articles(folder: Path, env_file: Path, dry_run: bool = False) -> None
         ftp.set_pasv(os.environ.get("BUNNY_FTP_PASSIVE", "true").casefold() == "true")
         storage_root = ftp.pwd()
 
+        uploaded_bytes = 0
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TextColumn("[cyan]{task.fields[current]:<40}[/cyan]"),
+            TextColumn("{task.fields[bytes]:>10}"),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                "Uploading", total=len(destinations), current="", bytes="0 B"
+            )
+            for pdf_path, year, volume, issue in destinations:
+                ftp.cwd(storage_root)
+                ensure_directory(ftp, year)
+                ensure_directory(ftp, f"Volume {volume}")
+                ensure_directory(ftp, f"Issue {issue}, {year}")
+                with pdf_path.open("rb") as file_handle:
+                    ftp.storbinary(f"STOR {pdf_path.name}", file_handle)
+                uploaded_bytes += pdf_path.stat().st_size
+                progress.update(
+                    task,
+                    current=pdf_path.name[:40],
+                    bytes=f"{uploaded_bytes / 1024 / 1024:.1f} MB",
+                )
+                progress.advance(task)
+
         for pdf_path, year, volume, issue in destinations:
-            ftp.cwd(storage_root)
-            ensure_directory(ftp, year)
-            ensure_directory(ftp, f"Volume {volume}")
-            ensure_directory(ftp, f"Issue {issue}, {year}")
-            with pdf_path.open("rb") as file_handle:
-                ftp.storbinary(f"STOR {pdf_path.name}", file_handle)
-            print(
-                f"Uploaded: {year}/Volume {volume}/"
+            console.print(
+                f"[green]Uploaded:[/green] {year}/Volume {volume}/"
                 f"Issue {issue}, {year}/{pdf_path.name}"
             )
 
