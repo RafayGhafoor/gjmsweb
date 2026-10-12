@@ -18,6 +18,12 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
 console = Console()
 
+# BunnyCDN answers a burst of HEAD requests with 428/429 rather than 503, so a
+# parallel run reports every link as broken unless these are retried. They mean
+# "ask again in a moment", not "this PDF is gone".
+TRANSIENT = {408, 425, 428, 429, 500, 502, 503, 504}
+ATTEMPTS = 4
+
 
 @dataclass(frozen=True)
 class Link:
@@ -33,10 +39,16 @@ class Result:
     status: int | None
     method: str
     detail: str
+    throttled: bool = False
 
     @property
     def working(self) -> bool:
         return self.status is not None and 200 <= self.status < 400
+
+    @property
+    def broken(self) -> bool:
+        """A real failure: not working, and not merely throttled by the CDN."""
+        return not self.working and not self.throttled
 
 
 def load_links(archive_path: Path) -> list[Link]:
@@ -65,8 +77,8 @@ def request_url(url: str) -> str:
     )
 
 
-def check_link(link: Link, timeout: float, delay: float) -> Result:
-    url = request_url(link.url)
+def _attempt(link: Link, url: str, timeout: float, delay: float) -> Result | None:
+    """One HEAD (then a ranged GET fallback). None means "retry me"."""
     if delay:
         time.sleep(delay)
     try:
@@ -78,10 +90,12 @@ def check_link(link: Link, timeout: float, delay: float) -> Result:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return Result(link, response.status, "HEAD", response.geturl())
     except urllib.error.HTTPError as error:
+        if error.code in TRANSIENT:
+            return None
         if error.code not in (400, 405, 501):
             return Result(link, error.code, "HEAD", str(error))
     except (urllib.error.URLError, TimeoutError, OSError):
-        pass
+        return None
 
     try:
         request = urllib.request.Request(
@@ -95,9 +109,21 @@ def check_link(link: Link, timeout: float, delay: float) -> Result:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return Result(link, response.status, "GET range", response.geturl())
     except urllib.error.HTTPError as error:
+        if error.code in TRANSIENT:
+            return None
         return Result(link, error.code, "GET range", str(error))
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
-        return Result(link, None, "GET range", str(error))
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None
+
+
+def check_link(link: Link, timeout: float, delay: float) -> Result:
+    url = request_url(link.url)
+    for attempt in range(ATTEMPTS):
+        outcome = _attempt(link, url, timeout, delay)
+        if outcome is not None:
+            return outcome
+        time.sleep(0.5 * (2**attempt))  # 0.5s, 1s, 2s, 4s
+    return Result(link, 428, "HEAD", "throttled by the CDN after retries", throttled=True)
 
 
 def verify(
@@ -137,7 +163,12 @@ def main() -> None:
         type=Path,
         default=Path("/Users/emumba/Downloads/projects/gjms-frontend/archive-data.json"),
     )
-    parser.add_argument("--workers", type=int, default=32)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="Concurrent checks. BunnyCDN answers large bursts with 428, so keep this modest",
+    )
     parser.add_argument("--timeout", type=float, default=20)
     parser.add_argument(
         "--delay",
@@ -152,19 +183,27 @@ def main() -> None:
         raise ValueError(f"No PDF links found in {args.archive}")
     console.print(f"[cyan]Found {len(links)} PDF links.[/cyan]")
     results = verify(links, max(1, args.workers), args.timeout, max(0, args.delay))
-    failed = [result for result in results if not result.working]
+    broken = [result for result in results if result.broken]
+    throttled = [result for result in results if result.throttled]
 
     console.print(
-        f"[bold green]Working: {len(results) - len(failed)}[/bold green] | "
-        f"[bold red]Failed: {len(failed)}[/bold red]"
+        f"[bold green]Working: {len(results) - len(broken) - len(throttled)}[/bold green] | "
+        f"[bold red]Broken: {len(broken)}[/bold red] | "
+        f"[yellow]Unverified (throttled): {len(throttled)}[/yellow]"
     )
-    for result in failed:
+    for result in broken:
         console.print(
             f"[red]{result.status or 'ERROR'}[/red] "
             f"{result.link.volume} #{result.link.article_number} "
             f"{result.link.title}: {result.link.url} ({result.detail})"
         )
-    if failed:
+    if throttled:
+        console.print(
+            "[yellow]These were rate-limited by the CDN, not broken. "
+            "Re-run with a lower --workers value and a --delay.[/yellow]"
+        )
+    # Only a genuinely broken link fails the run; throttling must not cry wolf.
+    if broken:
         raise SystemExit(1)
 
 
