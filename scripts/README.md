@@ -110,26 +110,75 @@ scoring `old` against them would always be 1.0.
 
 `score()` also runs the pre-existing pipeline (plain-text extraction plus the
 regex heuristics in `extract_articles.parse_article`) so every change is
-measured against it. Last comparison against the **pre-backfill** curated titles
-(stratified sample of 80 PDFs, 62 author-stripped "core" titles; a full-corpus
-run wants a quiet machine):
+measured against it. Last run: **full corpus** (325 PDFs, 272 comparable
+author-stripped "core" titles), against the pre-backfill reference.
 
 | Metric (vs curated core) | new | old |
 | --- | --- | --- |
-| **IDENTICAL to curated** | **79.0%** | 43.5% |
-| prefix or completes ref | **88.7%** | 53.2% |
-| similarity >= 0.90 | **85.5%** | 48.4% |
-| mean similarity | **0.958** | 0.778 |
-| suspicious titles (boilerplate picked) | **0/80** | 24/80 (30.0%) |
-| authors found | **92.5%** | (fallback to filename) |
-| abstract found | **98.8%** | 0% (never extracted) |
+| **IDENTICAL to curated** | **77.6%** | 46.7% |
+| prefix or completes ref | **83.5%** | 52.6% |
+| similarity >= 0.90 | **86.8%** | 54.4% |
+| mean similarity | **0.935** | 0.753 |
+| suspicious titles (boilerplate picked) | **0/325** | 102/325 (31.4%) |
+| authors found | **89.8%** | (fallback to filename) |
+| abstract found | **95.7%** | 0% (never extracted) |
+| high confidence | 89.5% | n/a |
 
 `IDENTICAL` against the **raw** curated titles is 0% for both sides by
 construction, because legacy titles append the author ("... - Khadija Naqvi");
-that is exactly why the author-stripped "core" comparison exists. The residual
-21% of non-identical titles are mostly hand-cleaned curated titles (the PDF has
-publisher typos), right-to-left Urdu papers with no Latin title, and cases where
-the backfill deliberately kept the curated title.
+that is exactly why the author-stripped "core" comparison exists.
+
+### Why the ceiling here is ~80%, not 100%
+
+Of the 61 differing titles, only a handful were real extraction errors. Bucketing
+them prevented wasted effort (and stopped a VLM being adopted on a hunch):
+
+| Bucket | Count | Real error? |
+| --- | --- | --- |
+| extraction is LONGER (curated title was truncated) | ~14 | no - extraction is better |
+| near-miss, ratio >= 0.90 (PDF has publisher typos, curator cleaned them) | ~18 | no |
+| right-to-left/Urdu page: no English title exists in the PDF | 13 | no - unrecoverable |
+| low/medium confidence (backfill deliberately kept curated) | ~8 | no - by design |
+| genuine errors (author glued to title, boilerplate prefix) | ~5 | **yes** |
+
+The 13 RTL cases were verified by dumping page 1 line by line: they carry an
+Urdu title and an English *abstract*, but no English title at all, and their PDF
+metadata is empty or journal boilerplate.
+
+## Rejected: VLM hybrid for title extraction
+
+Tested `thatdamai/moondream-1.8b` via Ollama (and, for comparison,
+`richardyoung/olmocr2:7b-q8` and `maternion/LightOnOCR-2`). **Do not re-attempt
+this** - it regresses accuracy badly. Evidence, measured on
+`Khadija Shaheen Paper.pdf`, whose true title the layout extractor already
+reproduces at similarity 1.000:
+
+| Invocation | Result | Similarity to true title |
+| --- | --- | --- |
+| "Read the title of this paper." | empty in 0.1s | 0.000 |
+| "Extract the title verbatim." | empty | 0.000 |
+| "Describe this image." (the only prompt that works) | `Unpacking the Growth with Puzzle in Pakistan: The Roles of Technology Export and Population` | **0.459** |
+| same at 3x resolution | dropped more words | **0.350** |
+
+Three specific traps:
+
+1. **The Modelfile template is `Question: {{ .Prompt }}\n\nAnswer:` and
+   `"Question:"` is a stop token.** Any prompt that makes the model echo it
+   halts generation immediately, so every read/extract prompt returns an empty
+   string. `/api/chat` behaves identically.
+2. **The one working prompt *captions*, it does not transcribe.** It invented
+   "with", turned "Exports" into "Export", and dropped "Renewable Energy, FDI,
+   Inflation and" entirely.
+3. **More resolution made it worse** (0.459 -> 0.350 at 3x).
+
+Note also that OpenDataLoader's own `--hybrid` flag is **not** pluggable to an
+arbitrary model: it accepts only `docling-fast` and needs its own backend server
+(`opendataloader-pdf[hybrid]`), so a moondream hybrid cannot be wired through it.
+
+On the 13 Urdu pages a VLM cannot help either: it captioned the journal *header*
+(`"titled Global Journal of Management Social Sciences and Humanities"`) and
+asserted the title was "written in Arabic script". The information is not on the
+page.
 
 ## Corpus location
 

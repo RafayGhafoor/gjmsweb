@@ -38,6 +38,12 @@ and must never overwrite the title of an `rtl` page (a pure-Urdu paper has no
 usable Latin title). Title/author/abstract quality is measured against the
 curated archive titles - see `scripts/README.md`.
 
+A VLM hybrid for title extraction was tested and **rejected** (moondream-1.8b
+captions rather than transcribes; its `Question:` stop token makes read prompts
+return empty). Accuracy ceiling is ~80% because most remaining differences are
+the curated title being truncated or the PDF containing publisher typos. Read
+`scripts/README.md` before re-attempting any model-based extraction.
+
 Live progress must name the current file: use a Rich progress column bound to
 `task.fields[current]`, as `extract_articles.py` does.
 
@@ -81,7 +87,9 @@ The mirrored corpus contains 325 PDFs. The parser successfully processes all
 325 (324 via OpenDataLoader structure tags, 1 via the legacy text path). OCR is
 used only when OpenDataLoader returns no text, which handles the scanned
 `2016/Volume 2/Issue 4, 2016/Farkhanda paper.pdf`; normal PDFs do not go through
-OCR.
+OCR. A mirror re-run reports "Mirror is already up to date" (336 remote files,
+all matching by size), so the 325 local PDFs are current - note the downloader
+compares file size, not a checksum.
 
 The mirror can go **stale in both directions**: a run recovered three Issue 3,
 2025 papers (`Rashid Majeed`, `Arfa Iqbal`, `Maria Riaz`) that were on Bunny but
