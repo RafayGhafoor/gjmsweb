@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,6 +27,14 @@ import os
 
 
 console = Console()
+
+# Deploy key used to push the frontend repository. GitHub rejects the default
+# identity chain (no active `Host github.com` block in ~/.ssh/config), so the
+# key is pinned explicitly instead of relying on the ssh-agent being primed.
+SSH_KEY = Path(
+    os.environ.get("GJMS_SSH_KEY", "~/.ssh/id_rsa_rafayghafoor")
+).expanduser()
+
 MONTHS = {
     "1": "Jan - March",
     "2": "April - June",
@@ -176,6 +185,21 @@ def update_archive(records: list[Article], archive_path: Path) -> bool:
     return changed
 
 
+def git_env() -> dict[str, str]:
+    """Environment that forces git to authenticate with GJMS_SSH_KEY."""
+    env = os.environ.copy()
+    if SSH_KEY.is_file():
+        env["GIT_SSH_COMMAND"] = (
+            f"ssh -i {shlex.quote(str(SSH_KEY))} -o IdentitiesOnly=yes"
+        )
+    else:
+        console.print(
+            f"[yellow]SSH key not found at {SSH_KEY}; "
+            "falling back to the default identity chain.[/yellow]"
+        )
+    return env
+
+
 def publish(frontend: Path, message: str) -> None:
     subprocess.run(["git", "add", "archive-data.json"], cwd=frontend, check=True)
     status = subprocess.run(
@@ -198,7 +222,21 @@ def publish(frontend: Path, message: str) -> None:
         cwd=frontend,
         check=True,
     )
-    subprocess.run(["git", "push", "origin", "main"], cwd=frontend, check=True)
+    try:
+        subprocess.run(
+            ["git", "push", "origin", "main"],
+            cwd=frontend,
+            check=True,
+            env=git_env(),
+        )
+    except subprocess.CalledProcessError as exc:
+        console.print(
+            f"[bold red]Push failed[/bold red] (exit {exc.returncode}). "
+            f"The commit is local; retry with:\n"
+            f"  cd {frontend} && git push origin main\n"
+            f"Check that {SSH_KEY} is authorized on the GitHub remote."
+        )
+        raise
     console.print("[bold green]Frontend pushed to GitHub.[/bold green]")
 
 
