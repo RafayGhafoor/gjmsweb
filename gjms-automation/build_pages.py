@@ -31,16 +31,17 @@ USAGE
 from __future__ import annotations
 
 import argparse
-import hashlib
 import html
 import json
 import re
-import unicodedata
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
+
+# Slug assignment moved here so it survives this script's retirement: the
+# frontend derives every article URL from archive-data.json's `slug`.
+from slugs import make_slug
 
 console = Console(stderr=True)
 
@@ -201,28 +202,6 @@ HEAD = """<!DOCTYPE html>
 </body>
 </html>
 """
-
-
-def slugify(value: str, limit: int = 80) -> str:
-    """URL-safe slug, ASCII only."""
-    text = unicodedata.normalize("NFKD", value or "")
-    text = text.encode("ascii", "ignore").decode("ascii").casefold()
-    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
-    text = re.sub(r"-{2,}", "-", text)
-    return text[:limit].strip("-")
-
-
-def make_slug(article: dict) -> str:
-    """Stable slug: readable words plus a hash of the PDF URL.
-
-    The hash keeps slugs unique and stable even if two papers share a title. The
-    slug is persisted in archive-data.json so a later title fix cannot change an
-    already-published URL.
-    """
-    key = str(article.get("pdf") or article.get("title") or "")
-    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:7]
-    base = slugify(str(article.get("title") or "article"))
-    return f"{base}-{digest}" if base else f"article-{digest}"
 
 
 def trim_for_meta(text: str, limit: int = 155) -> str:

@@ -27,8 +27,8 @@ flags **before** changing anything, then requires approval:
 
 It then uploads to Bunny (skipping files already there at the same size),
 updates `archive-data.json` and `abstracts.json` (updating existing entries in
-place when their metadata changed), regenerates the static article pages,
-commits and pushes.
+place when their metadata changed), commits and pushes. The website's build
+prerenders the pages from that data.
 
 ## Correcting metadata by hand
 
@@ -41,9 +41,10 @@ python gjms-automation/cli.py list "<pattern>"
 ```
 
 `set` writes an override to `overrides.json`, applies it to the archive, and
-regenerates the affected pages. Overrides are applied **last** on every future
-run, so extraction and the backfill can never silently undo a hand correction.
-`slug` is not overridable - it is the published URL.
+publishes on request. It does not prerender pages - the website's SvelteKit build
+generates those from the data on push. Overrides are applied **last** on every
+future run, so extraction and the backfill can never silently undo a hand
+correction. `slug` is not overridable - it is the published URL.
 
 ## Tools
 
@@ -53,11 +54,11 @@ run, so extraction and the backfill can never silently undo a hand correction.
 | `run_automation.py` | End-to-end workflow with the preview/confirm gate |
 | `metadata.py` | Title/author/abstract extraction (library; see `../agents.md`) |
 | `overrides.py` | Loads/applies `overrides.json` (manual corrections) |
+| `slugs.py` | Assigns the persisted `slug` the website builds article URLs from |
 | `download_bunny.py` | Mirror the whole Bunny tree into `bunny-content/` |
 | `upload_articles.py` | Upload PDFs to Bunny only, skipping those already present |
 | `backfill_archive.py` | One-off repair pass over every archive entry |
-| `build_pages.py` | **Legacy** page generator for the pre-SvelteKit site; no longer called |
-| `extract_articles.py` | Legacy metadata parser; still used for issue and page range |
+| `build_pages.py` | **Legacy** page generator for the pre-SvelteKit site; no longer called || `extract_articles.py` | Legacy metadata parser; still used for issue and page range |
 | `verify_links.py` | Check every archive PDF link (HEAD, ranged GET fallback) |
 
 ## What this repo owns

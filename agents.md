@@ -28,8 +28,8 @@ keyed by PDF filename) holds title/author/abstract overrides and is applied
 
 `slug` is deliberately not overridable: it is the published URL.
 
-Set one with the CLI, which writes the override, updates the JSON, regenerates
-the affected pages and (with `--push`) publishes:
+Set one with the CLI, which writes the override, updates the JSON, and (with
+`--push`) publishes:
 
 ```bash
 python gjms-automation/cli.py set "<pattern>" --title "..." --authors "..."
@@ -95,8 +95,14 @@ The automation supplies **data only**: `archive-data.json` (titles/authors) and
 latter; the site keeps both at the repository root and imports them.
 
 `slug` is load-bearing: the frontend derives every article URL from it
-(`archive.articles.filter(a => a.slug)`), so it must be stable and must never be
-hand-written or renumbered - `build_pages.py` assigns it once and persists it.
+(`archive.articles.filter(a => a.slug)`), so an article without one gets **no
+page and no sitemap entry**. It is assigned by `gjms-automation/slugs.py`, called
+from `run_automation.py` whenever a slug is missing, and persisted in
+`archive-data.json`. It must never be hand-written or renumbered.
+
+Slug assignment used to live in `build_pages.py`. It was moved to `slugs.py`
+when page generation was retired, because retiring that script would otherwise
+have silently stopped new articles from getting a page.
 
 `gjms-automation/build_pages.py` wrote a parallel set of `article/*.html`,
 `sitemap.xml` and `robots.txt` at the repository root for the previous flat-HTML
@@ -140,7 +146,7 @@ skipped.
 ## Commands
 
 ```bash
-# Interactive menu (publish, browse, edit, clear, pages, backfill, mirror, links).
+# Interactive menu (publish, browse, edit, clear, backfill, mirror, links).
 python gjms-automation/cli.py
 
 # Correct an article's metadata by hand and keep the correction.
@@ -166,7 +172,8 @@ python gjms-automation/upload_articles.py --dry-run
 # Upload PDFs from test_files.
 python gjms-automation/upload_articles.py
 
-# Regenerate article pages, sitemap and robots from the archive JSON.
+# LEGACY: the page generator for the pre-SvelteKit site, not called by anything.
+# The website's build prerenders article pages from archive-data.json.
 python gjms-automation/build_pages.py --dry-run
 python gjms-automation/build_pages.py
 ```

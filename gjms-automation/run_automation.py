@@ -35,6 +35,7 @@ from titlecase import titlecase
 from extract_articles import extract_first_page_text
 from metadata import extract_metadata
 import overrides as override_store
+import slugs
 from upload_articles import (
     article_destination,
     ensure_directory,
@@ -369,7 +370,7 @@ def update_archive(records: list[Article], archive_path: Path) -> dict[str, list
     and updated when they differ, and the result reports what happened.
     """
     data = json.loads(archive_path.read_text(encoding="utf-8"))
-    report: dict[str, list] = {"added": [], "updated": [], "unchanged": []}
+    report: dict[str, list] = {"added": [], "updated": [], "unchanged": [], "slugs": []}
 
     for article in records:
         section = find_section(data, article)
@@ -411,12 +412,23 @@ def update_archive(records: list[Article], archive_path: Path) -> dict[str, list
         report["updated"].append((article.path.name, sorted(updates)))
         console.print(f"[green]Archive updated:[/green] {article.path.name}")
 
-    if report["added"] or report["updated"]:
+    # Every article needs a slug: the website derives article URLs from it, and
+    # an article without one is skipped by the prerenderer entirely. Assigning
+    # here (not in the legacy build_pages.py) keeps new papers getting a page.
+    assigned = slugs.assign_missing(data)
+    report["slugs"].extend(assigned)
+    for slug in assigned:
+        console.print(f"[cyan]Slug assigned:[/cyan] {slug}")
+    collisions = slugs.duplicates(data)
+    if collisions:
+        raise RuntimeError(f"Duplicate article slugs would collide: {collisions}")
+
+    if report["added"] or report["updated"] or report["slugs"]:
         archive_path.write_text(
             json.dumps(data, indent=2, ensure_ascii=True) + "\n",
             encoding="utf-8",
         )
-    return changed
+    return report
 
 
 def git_env() -> dict[str, str]:
@@ -656,7 +668,7 @@ def main() -> None:
     abstracts_added = update_abstracts(
         records, args.frontend / "abstracts.json"
     )
-    if report["added"] or report["updated"] or abstracts_added:
+    if report["added"] or report["updated"] or report["slugs"] or abstracts_added:
         # No page generation here. The frontend is now a SvelteKit build that
         # prerenders /article/<slug>.html from archive-data.json and emits its
         # own sitemap.xml/robots.txt, so only the data files are ours to write.

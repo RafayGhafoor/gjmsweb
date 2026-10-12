@@ -125,15 +125,18 @@ python gjms-automation/cli.py set "unpacking the growth" \
     --authors "Khadija Shaheen, Abdul Ghafoor Awan"
 ```
 
-That writes the override, updates `archive-data.json` and `abstracts.json`,
-regenerates the affected pages, and (with `--push`) publishes. Add `--note` to
-record why. To hand back to extraction: `cli.py clear "<pattern>"`.
+That writes the override, updates `archive-data.json` and `abstracts.json`, and
+(with `--push`) publishes. It does **not** prerender pages: the website's
+SvelteKit build generates those from the data on push. Add `--note` to record
+why. To hand back to extraction: `cli.py clear "<pattern>"`.
 
-The `slug` is deliberately **not** overridable: it is the published URL, so
-correcting a title must not change it.
+`slug` is deliberately **not** overridable: it is the published URL, so
+correcting a title must not change it. Slugs are assigned by `slugs.py` (called
+from `run_automation.py`) and only when missing - an article without one gets no
+page on the website at all.
 
 Run `python gjms-automation/cli.py` with no arguments for an interactive menu
-(publish, browse, edit, clear, pages, backfill, mirror, links).
+(publish, browse, edit, clear, backfill, mirror, links).
 
 ### 5. Update the frontend archive
 
@@ -179,8 +182,9 @@ python gjms-automation/run_automation.py
 ```
 
 It processes PDFs concurrently, previews the extracted metadata, asks for
-confirmation, then uploads to Bunny, updates both JSON files, regenerates the
-static article pages, commits and pushes `main`.
+confirmation, then uploads to Bunny (skipping what is already there), updates
+both JSON files, commits and pushes `main`. The website's own build prerenders
+the pages from that data.
 
 The preview is the safety gate. The original bug was a title that had swallowed
 the author line, affiliations, an email and two ORCIDs (461 characters) and was
