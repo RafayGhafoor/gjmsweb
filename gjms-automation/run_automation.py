@@ -1,5 +1,10 @@
 """Upload new PDFs, update the frontend archive, and publish the changes.
 
+Writes only the two data files the website consumes:
+`archive-data.json` (titles/authors) and `abstracts.json` (abstracts, keyed by
+PDF URL). The frontend is a SvelteKit build that prerenders article pages and
+its own sitemap from that data, so this script no longer generates pages.
+
 Always previews the extracted metadata before changing anything, and requires
 confirmation, because the original bug was a bad title being published with
 nobody looking at the extracted metadata.
@@ -29,7 +34,6 @@ from titlecase import titlecase
 
 from extract_articles import extract_first_page_text
 from metadata import extract_metadata
-from build_pages import run_build
 import overrides as override_store
 from upload_articles import (
     article_destination,
@@ -455,15 +459,7 @@ def update_abstracts(records: list[Article], abstracts_path: Path) -> int:
 
 def publish(frontend: Path, message: str) -> None:
     subprocess.run(
-        [
-            "git",
-            "add",
-            "archive-data.json",
-            "abstracts.json",
-            "sitemap.xml",
-            "robots.txt",
-            "article",
-        ],
+        ["git", "add", "archive-data.json", "abstracts.json"],
         cwd=frontend,
         check=True,
     )
@@ -661,12 +657,10 @@ def main() -> None:
         records, args.frontend / "abstracts.json"
     )
     if report["added"] or report["updated"] or abstracts_added:
-        # New or improved metadata needs its page and the sitemap regenerated.
-        run_build(
-            archive=archive_path,
-            abstracts_path=args.frontend / "abstracts.json",
-            out=args.frontend / "article",
-        )
+        # No page generation here. The frontend is now a SvelteKit build that
+        # prerenders /article/<slug>.html from archive-data.json and emits its
+        # own sitemap.xml/robots.txt, so only the data files are ours to write.
+        # See gjms-frontend/CLAUDE.md ("retire step 5 at cutover").
         parts = []
         if report["added"]:
             parts.append(f"add {len(report['added'])}")

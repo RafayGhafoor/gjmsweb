@@ -49,16 +49,23 @@ run, so extraction and the backfill can never silently undo a hand correction.
 
 | Script | Purpose |
 | --- | --- |
-| `cli.py` | Interactive menu plus `run`/`set`/`show`/`list`/`clear`/`pages`/`mirror`/`links` |
+| `cli.py` | Interactive menu plus `run`/`set`/`show`/`list`/`clear`/`mirror`/`links` |
 | `run_automation.py` | End-to-end workflow with the preview/confirm gate |
 | `metadata.py` | Title/author/abstract extraction (library; see `../agents.md`) |
 | `overrides.py` | Loads/applies `overrides.json` (manual corrections) |
 | `download_bunny.py` | Mirror the whole Bunny tree into `bunny-content/` |
 | `upload_articles.py` | Upload PDFs to Bunny only, skipping those already present |
 | `backfill_archive.py` | One-off repair pass over every archive entry |
-| `build_pages.py` | Regenerate `article/<slug>.html`, `sitemap.xml`, `robots.txt` |
+| `build_pages.py` | **Legacy** page generator for the pre-SvelteKit site; no longer called |
 | `extract_articles.py` | Legacy metadata parser; still used for issue and page range |
 | `verify_links.py` | Check every archive PDF link (HEAD, ranged GET fallback) |
+
+## What this repo owns
+
+Only two files are written for the website: `archive-data.json` (titles/authors)
+and `abstracts.json` (abstracts, keyed by PDF URL). The frontend is a SvelteKit
+build that prerenders article pages and its own sitemap from that data, so this
+repo does not generate pages.
 
 Standalone commands:
 
@@ -75,7 +82,8 @@ python gjms-automation/upload_articles.py
 python gjms-automation/backfill_archive.py --dry-run
 python gjms-automation/backfill_archive.py
 
-# Regenerate the static article pages from the archive JSON.
+# Legacy page generator for the pre-SvelteKit site. Not called by anything;
+# the SvelteKit build prerenders article pages from archive-data.json.
 python gjms-automation/build_pages.py --dry-run
 python gjms-automation/build_pages.py
 

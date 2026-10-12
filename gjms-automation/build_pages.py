@@ -1,19 +1,27 @@
 """Generate static per-article pages, sitemap.xml and robots.txt.
 
-WHY
-    `archive.html` builds its article list in JavaScript inside a modal, so search
-    engines see no titles, authors or abstracts there. These static pages put that
-    metadata into real HTML so the journal's content is indexable, and give every
-    article a stable canonical URL to link to.
+LEGACY - superseded by the frontend's SvelteKit build.
+
+The website is now a SvelteKit app prerendered to `build/`. It generates
+`article/<slug>.html` from `archive-data.json` plus its own `sitemap.xml`,
+`robots.txt`, `llms.txt` and 404 page, and the deploy workflow publishes only
+`build/`. The files this script writes at the repository root are therefore not
+deployed, and keeping two sources for the same URLs would let them drift.
+
+`run_automation.py` no longer calls it. It is kept because the generated files
+are still present in the frontend repository, and because `make_slug()` below is
+still the thing that assigns the `slug` values the frontend now depends on - the
+frontend derives every article URL from `archive.articles[].slug`. It also still
+writes the persisted slug back into `archive-data.json`.
+
+New slugs are only ever assigned when missing, so a later title correction
+cannot change a published URL.
 
 OUTPUTS (in the frontend repo)
-    article/<slug>.html   one page per article: title, authors, abstract, PDF link,
-                          meta description, canonical link and ScholarlyArticle
-                          JSON-LD
+    article/<slug>.html   one page per article
     sitemap.xml           every article page plus the main site pages
     robots.txt            allow all + point at the sitemap
-    archive-data.json     gains a persisted `slug` per article (written only when
-                          a slug is missing, so published URLs never change)
+    archive-data.json     gains a persisted `slug` per article
 
 USAGE
     python gjms-automation/build_pages.py --dry-run

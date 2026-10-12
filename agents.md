@@ -14,7 +14,9 @@ The `gjms-automation` tools maintain the article archive:
    (titles/authors) and `abstracts.json` (abstracts, keyed by PDF URL). An entry
    already present is **updated in place** when its metadata changed, which is
    how re-running applies a better title.
-6. Generate the static per-article pages, `sitemap.xml` and `robots.txt`.
+6. The website's SvelteKit build prerenders `article/<slug>.html` and its own
+   `sitemap.xml`/`robots.txt` from that data. **The automation does not
+   generate pages** (see "Static pages and SEO" below).
 7. Push the frontend repository to GitHub to publish the changes.
 
 ## Manual corrections
@@ -82,26 +84,24 @@ Live progress must name the current file: use a Rich progress column bound to
 
 ## Static pages and SEO
 
-`gjms-automation/build_pages.py` generates `article/<slug>.html` for every
-article, plus `sitemap.xml` and `robots.txt`.
+The frontend is a **SvelteKit app** (`gjms-frontend`) that `@sveltejs/adapter-static`
+prerenders into `build/`; the deploy workflow runs `npm ci && npm run build` and
+publishes only `build/`. It generates `article/<slug>.html` from `archive-data.json`
+and emits its own `sitemap.xml` (401 URLs), `robots.txt`, `llms.txt` and 404 page.
 
-This exists because `archive.html` builds its article list **in JavaScript,
-inside a modal, only after the user clicks an issue button**. Search engines do
-not click, so that page exposes no titles, authors, abstracts or PDF links. The
-static pages are the indexable surface: real HTML plus `ScholarlyArticle`
-JSON-LD, a meta description, a canonical URL and `citation_*` meta tags.
+The automation supplies **data only**: `archive-data.json` (titles/authors) and
+`abstracts.json` (abstracts keyed by PDF URL). The data layer in
+`src/lib/data/archive.ts` reads the former and `src/lib/client/abstracts.ts` the
+latter; the site keeps both at the repository root and imports them.
 
-Two separate surfaces, deliberately:
+`slug` is load-bearing: the frontend derives every article URL from it
+(`archive.articles.filter(a => a.slug)`), so it must be stable and must never be
+hand-written or renumbered - `build_pages.py` assigns it once and persists it.
 
-| Surface | Data source | SEO role |
-| --- | --- | --- |
-| `article/<slug>.html` | abstract inline in the HTML | the indexable content |
-| `archive.html` modal | `abstracts.json`, lazy on click | keeps the archive page light |
-
-Slugs are **persisted** in `archive-data.json` and only ever assigned when
-missing, so a later title correction cannot change a published URL. `build_pages`
-is idempotent and called by `run_automation.py`, so new articles get a page
-automatically; it is also imported directly as `run_build()`.
+`gjms-automation/build_pages.py` wrote a parallel set of `article/*.html`,
+`sitemap.xml` and `robots.txt` at the repository root for the previous flat-HTML
+site. Those are **not deployed** and are now legacy: two sources for one set of
+URLs would drift. `run_automation.py` no longer calls it.
 
 ## Live progress requirement
 
