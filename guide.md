@@ -105,9 +105,35 @@ python gjms-automation/upload_articles.py
 ```
 
 The command uploads PDFs from `test_files/` to their derived Bunny
-directories. It prints each completed upload. Re-running the command uploads
-the same filenames again, so use the dry run and inspect the remote directory
-before rerunning.
+directories and prints each completed upload.
+
+**Re-running is safe and cheap.** A file already on Bunny at the same size is
+**skipped**, so re-running only sends files that are new or have changed. This
+is what lets you re-run the workflow purely to refresh metadata: nothing is
+re-uploaded, but improved titles, authors and abstracts are applied (step 5).
+
+### Correcting metadata by hand
+
+Because extraction is rebuilt from the PDFs on every run, a manual correction
+has to be recorded somewhere that survives. Overrides live in
+`gjms-automation/overrides.json`, keyed by PDF filename, and are applied **last**
+— so a hand correction always wins over extraction. The easiest way to set one:
+
+```bash
+python gjms-automation/cli.py set "unpacking the growth" \
+    --title "Unpacking the Growth Puzzle in Pakistan" \
+    --authors "Khadija Shaheen, Abdul Ghafoor Awan"
+```
+
+That writes the override, updates `archive-data.json` and `abstracts.json`,
+regenerates the affected pages, and (with `--push`) publishes. Add `--note` to
+record why. To hand back to extraction: `cli.py clear "<pattern>"`.
+
+The `slug` is deliberately **not** overridable: it is the published URL, so
+correcting a title must not change it.
+
+Run `python gjms-automation/cli.py` with no arguments for an interactive menu
+(publish, browse, edit, clear, pages, backfill, mirror, links).
 
 ### 5. Update the frontend archive
 
@@ -134,6 +160,11 @@ on click.
 The `slug` is the article's published URL (`article/<slug>.html`). It is persisted
 and only ever assigned when missing, so correcting a title later cannot change a
 already-published URL. Do not hand-edit it.
+
+An article already in the archive is **updated in place** when its metadata has
+changed, rather than skipped — that is how re-running applies a better title. A
+low-confidence or RTL extraction never replaces a title that is already there,
+though it may still fill in authors or the abstract.
 
 Preserve the existing field names and URL convention. Validate the JSON:
 

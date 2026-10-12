@@ -53,6 +53,19 @@ def ensure_directory(ftp: FTP, name: str) -> None:
         ftp.cwd(name)
 
 
+def remote_size(ftp: FTP, name: str) -> int | None:
+    """Size of `name` in the current FTP directory, or None when absent.
+
+    Servers differ: some raise on a missing file and some return None, so both
+    are treated as "absent". Shared with `run_automation.py`.
+    """
+    try:
+        size = ftp.size(name)
+    except (error_perm, OSError):
+        return None
+    return size if size and size > 0 else None
+
+
 def upload_articles(folder: Path, env_file: Path, dry_run: bool = False) -> None:
     """Upload each PDF to Bunny under <year>/<issue>/<filename>."""
     load_env(env_file)
@@ -109,6 +122,8 @@ def upload_articles(folder: Path, env_file: Path, dry_run: bool = False) -> None
         storage_root = ftp.pwd()
 
         uploaded_bytes = 0
+        uploaded = 0
+        skipped = 0
         with Progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
@@ -126,9 +141,22 @@ def upload_articles(folder: Path, env_file: Path, dry_run: bool = False) -> None
                 ensure_directory(ftp, year)
                 ensure_directory(ftp, f"Volume {volume}")
                 ensure_directory(ftp, f"Issue {issue}, {year}")
+
+                local_size = pdf_path.stat().st_size
+                if remote_size(ftp, pdf_path.name) == local_size:
+                    skipped += 1
+                    progress.update(
+                        task,
+                        current=f"skip {pdf_path.name}"[:40],
+                        bytes=f"{uploaded_bytes / 1024 / 1024:.1f} MB",
+                    )
+                    progress.advance(task)
+                    continue
+
                 with pdf_path.open("rb") as file_handle:
                     ftp.storbinary(f"STOR {pdf_path.name}", file_handle)
-                uploaded_bytes += pdf_path.stat().st_size
+                uploaded_bytes += local_size
+                uploaded += 1
                 progress.update(
                     task,
                     current=pdf_path.name[:40],
@@ -140,6 +168,11 @@ def upload_articles(folder: Path, env_file: Path, dry_run: bool = False) -> None
             console.print(
                 f"[green]Uploaded:[/green] {year}/Volume {volume}/"
                 f"Issue {issue}, {year}/{pdf_path.name}"
+            )
+        if skipped:
+            console.print(
+                f"[cyan]{skipped} of {len(destinations)} already on Bunny "
+                f"(same size) and skipped; {uploaded} uploaded.[/cyan]"
             )
 
 

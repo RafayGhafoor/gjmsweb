@@ -9,30 +9,52 @@ For orientation read `../guide.md` (human walkthrough) and `../agents.md`
 ## The normal workflow
 
 ```bash
-python gjms-automation/run_automation.py             # preview -> confirm -> publish
-python gjms-automation/run_automation.py --dry-run   # preview only, nothing changes
-python gjms-automation/run_automation.py --yes       # skip the prompt (unattended)
+python gjms-automation/cli.py                  # interactive menu (rich)
+python gjms-automation/cli.py run              # preview -> confirm -> publish
+python gjms-automation/cli.py run --dry-run    # preview only, nothing changes
+python gjms-automation/cli.py run --yes        # skip the prompt (unattended)
 ```
 
-`run_automation.py` prints every new article's title, authors and abstract
-length with warning flags **before** changing anything, then requires approval:
+With no command the CLI opens an interactive menu. With a non-terminal stdin it
+prints help instead, so it never blocks a pipe or a script.
+
+`run` prints every new article's title, authors and abstract length with warning
+flags **before** changing anything, then requires approval:
 
 * clean run -> type `y`
 * any warnings -> must type `publish`
 * not a terminal -> refuses unless `--yes` is passed
 
-It then uploads to Bunny, updates `archive-data.json` (titles/authors) and
-`abstracts.json` (abstracts, keyed by PDF URL), regenerates the static article
-pages, commits and pushes.
+It then uploads to Bunny (skipping files already there at the same size),
+updates `archive-data.json` and `abstracts.json` (updating existing entries in
+place when their metadata changed), regenerates the static article pages,
+commits and pushes.
+
+## Correcting metadata by hand
+
+```bash
+python gjms-automation/cli.py set "<pattern>" --title "..." --authors "..."
+python gjms-automation/cli.py set "<pattern>" --abstract-file new.txt --push
+python gjms-automation/cli.py clear "<pattern>"
+python gjms-automation/cli.py show "<pattern>"
+python gjms-automation/cli.py list "<pattern>"
+```
+
+`set` writes an override to `overrides.json`, applies it to the archive, and
+regenerates the affected pages. Overrides are applied **last** on every future
+run, so extraction and the backfill can never silently undo a hand correction.
+`slug` is not overridable - it is the published URL.
 
 ## Tools
 
 | Script | Purpose |
 | --- | --- |
+| `cli.py` | Interactive menu plus `run`/`set`/`show`/`list`/`clear`/`pages`/`mirror`/`links` |
 | `run_automation.py` | End-to-end workflow with the preview/confirm gate |
 | `metadata.py` | Title/author/abstract extraction (library; see `../agents.md`) |
+| `overrides.py` | Loads/applies `overrides.json` (manual corrections) |
 | `download_bunny.py` | Mirror the whole Bunny tree into `bunny-content/` |
-| `upload_articles.py` | Upload PDFs to Bunny only, no archive/frontend changes |
+| `upload_articles.py` | Upload PDFs to Bunny only, skipping those already present |
 | `backfill_archive.py` | One-off repair pass over every archive entry |
 | `build_pages.py` | Regenerate `article/<slug>.html`, `sitemap.xml`, `robots.txt` |
 | `extract_articles.py` | Legacy metadata parser; still used for issue and page range |

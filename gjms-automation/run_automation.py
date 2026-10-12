@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -30,12 +30,14 @@ from titlecase import titlecase
 from extract_articles import extract_first_page_text
 from metadata import extract_metadata
 from build_pages import run_build
+import overrides as override_store
 from upload_articles import (
     article_destination,
     ensure_directory,
     load_env,
+    remote_size,
 )
-from ftplib import FTP
+from ftplib import FTP, error_perm
 import os
 
 
@@ -174,10 +176,61 @@ def collect_articles(folder: Path) -> list[Article]:
         console.print(f"[red]Failed: {path}: {error}[/red]")
     if failures:
         raise RuntimeError(f"{len(failures)} PDF(s) could not be processed")
+
+    records = apply_overrides(records)
     return sorted(records, key=lambda article: article.path.name.casefold())
 
 
+def apply_overrides(records: list[Article]) -> list[Article]:
+    """Let hand-corrected metadata win over extraction.
+
+    Applied after extraction so a title fixed by hand is not overwritten on the
+    next run (see `overrides.py`). An override is treated as authoritative, so
+    the result is marked high confidence and not RTL.
+    """
+    data = override_store.load()
+    if not data:
+        return records
+    out: list[Article] = []
+    for article in records:
+        entry = override_store.for_file(data, article.path.name)
+        if not entry:
+            out.append(article)
+            continue
+        fields = override_store.apply_to(
+            {
+                "title": article.title,
+                "authors": article.authors,
+                "abstract": article.abstract,
+            },
+            data,
+            article.path.name,
+        )
+        console.print(
+            f"[magenta]Override applied:[/magenta] {article.path.name} "
+            f"({', '.join(sorted(entry))})"
+        )
+        out.append(
+            replace(
+                article,
+                title=fields["title"],
+                authors=fields["authors"],
+                abstract=fields["abstract"],
+                confidence="high",
+                rtl=False,
+            )
+        )
+    return out
+
+
 def upload(records: list[Article], env_file: Path) -> None:
+    """Upload each PDF, skipping files already present on Bunny at the same size.
+
+    Re-running is therefore cheap and safe: an unchanged PDF is not re-sent,
+    while a *changed* PDF (different size) still uploads. Metadata improvements
+    are applied separately by `update_archive`, so re-running after the
+    extractor improves refreshes titles without re-uploading anything.
+    """
     load_env(env_file)
     with FTP() as ftp:
         ftp.connect(
@@ -189,6 +242,8 @@ def upload(records: list[Article], env_file: Path) -> None:
         ftp.set_pasv(os.environ.get("BUNNY_FTP_PASSIVE", "true").casefold() == "true")
         root = ftp.pwd()
         uploaded_bytes = 0
+        uploaded: list[Article] = []
+        skipped: list[Article] = []
         with Progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
@@ -206,9 +261,22 @@ def upload(records: list[Article], env_file: Path) -> None:
                 ensure_directory(ftp, article.year)
                 ensure_directory(ftp, f"Volume {article.volume}")
                 ensure_directory(ftp, f"Issue {article.issue}, {article.year}")
+
+                local_size = article.path.stat().st_size
+                if remote_size(ftp, article.path.name) == local_size:
+                    skipped.append(article)
+                    progress.update(
+                        task,
+                        current=f"skip {article.path.name}"[:40],
+                        bytes=f"{uploaded_bytes / 1024 / 1024:.1f} MB",
+                    )
+                    progress.advance(task)
+                    continue
+
                 with article.path.open("rb") as file_handle:
                     ftp.storbinary(f"STOR {article.path.name}", file_handle)
-                uploaded_bytes += article.path.stat().st_size
+                uploaded_bytes += local_size
+                uploaded.append(article)
                 progress.update(
                     task,
                     current=article.path.name[:40],
@@ -217,56 +285,129 @@ def upload(records: list[Article], env_file: Path) -> None:
                 progress.advance(task)
 
         # Printed after the bar so the summary does not interleave with it.
-        for article in records:
+        for article in uploaded:
             console.print(f"[green]Uploaded:[/green] {article.remote_path}")
+        for article in skipped:
+            console.print(
+                f"[yellow]Skipped (already on Bunny):[/yellow] {article.remote_path}"
+            )
+        if skipped:
+            console.print(
+                f"[cyan]{len(skipped)} of {len(records)} already present; "
+                f"{len(uploaded)} uploaded.[/cyan]"
+            )
 
 
-def update_archive(records: list[Article], archive_path: Path) -> bool:
+def find_section(data: list[dict], article: Article) -> dict | None:
+    section_title = section_title_for(article)
+    return next(
+        (
+            item
+            for item in data
+            if item.get("volume") == f"Vol {article.volume}"
+            and item.get("title") == section_title
+        ),
+        None,
+    )
+
+
+def section_title_for(article: Article) -> str:
+    return (
+        f"Vol {article.volume} - No. {article.issue} "
+        f"({MONTHS.get(article.issue, f'Issue {article.issue}')}, {article.year})"
+    )
+
+
+def find_article(section: dict, article: Article) -> dict | None:
+    """The existing entry for this PDF, matched on its filename."""
+    return next(
+        (
+            item
+            for item in section.get("articles", [])
+            if unquote(str(item.get("pdf", "")).rsplit("/", 1)[-1])
+            == article.path.name
+        ),
+        None,
+    )
+
+
+def planned_updates(article: Article, existing: dict | None) -> dict[str, str]:
+    """Fields this article would change, as {field: new value}.
+
+    A low-confidence or right-to-left extraction never replaces a title that is
+    already there - AGENTS.md requires keeping the curated title in that case -
+    but it may still fill in authors or the abstract.
+    """
+    if existing is None:
+        return {
+            "title": article.title,
+            "authors": article.authors,
+            "pages": article.pages,
+        }
+
+    updates: dict[str, str] = {}
+    may_replace_title = article.confidence == "high" and not article.rtl
+    if article.title and (may_replace_title or not existing.get("title")):
+        if existing.get("title") != article.title:
+            updates["title"] = article.title
+    if article.authors and existing.get("authors") != article.authors:
+        updates["authors"] = article.authors
+    if article.pages and existing.get("pages") != article.pages:
+        updates["pages"] = article.pages
+    return updates
+
+
+def update_archive(records: list[Article], archive_path: Path) -> dict[str, list]:
+    """Insert new articles and refresh existing ones in place.
+
+    Existing entries used to be skipped outright, which meant re-running after
+    the extractor improved could never fix a title. Now the fields are compared
+    and updated when they differ, and the result reports what happened.
+    """
     data = json.loads(archive_path.read_text(encoding="utf-8"))
-    changed = False
+    report: dict[str, list] = {"added": [], "updated": [], "unchanged": []}
+
     for article in records:
-        section_title = (
-            f"Vol {article.volume} - No. {article.issue} "
-            f"({MONTHS.get(article.issue, f'Issue {article.issue}')}, {article.year})"
-        )
-        section = next(
-            (
-                item
-                for item in data
-                if item.get("volume") == f"Vol {article.volume}"
-                and item.get("title") == section_title
-            ),
-            None,
-        )
+        section = find_section(data, article)
         if section is None:
             section = {
                 "volume": f"Vol {article.volume}",
-                "title": section_title,
+                "title": section_title_for(article),
                 "articles": [],
             }
             data.append(section)
-            changed = True
 
-        existing = {
-            unquote(str(item.get("pdf", "")).rsplit("/", 1)[-1])
-            for item in section["articles"]
-        }
-        if article.path.name in existing:
-            console.print(f"[yellow]Already in archive:[/yellow] {article.path.name}")
+        existing = find_article(section, article)
+        if existing is None:
+            section["articles"].append(
+                {
+                    "num": len(section["articles"]) + 1,
+                    "title": article.title,
+                    "authors": article.authors,
+                    "pages": article.pages,
+                    "pdf": article.public_url,
+                }
+            )
+            report["added"].append(article.path.name)
+            console.print(f"[green]Archive added:[/green] {article.path.name}")
             continue
-        section["articles"].append(
-            {
-                "num": len(section["articles"]) + 1,
-                "title": article.title,
-                "authors": article.authors,
-                "pages": article.pages,
-                "pdf": article.public_url,
-            }
-        )
-        changed = True
-        console.print(f"[green]Archive added:[/green] {article.path.name}")
 
-    if changed:
+        updates = planned_updates(article, existing)
+        if not updates:
+            report["unchanged"].append(article.path.name)
+            console.print(f"[dim]Archive unchanged:[/dim] {article.path.name}")
+            continue
+        for field, value in updates.items():
+            console.print(
+                f"[cyan]{field}[/cyan] {article.path.name}:\n"
+                f"    - {existing.get(field)}\n"
+                f"    + {value}"
+            )
+        existing.update(updates)
+        report["updated"].append((article.path.name, sorted(updates)))
+        console.print(f"[green]Archive updated:[/green] {article.path.name}")
+
+    if report["added"] or report["updated"]:
         archive_path.write_text(
             json.dumps(data, indent=2, ensure_ascii=True) + "\n",
             encoding="utf-8",
@@ -364,7 +505,27 @@ def publish(frontend: Path, message: str) -> None:
     console.print("[bold green]Frontend pushed to GitHub.[/bold green]")
 
 
-def preview(records: list[Article]) -> int:
+def plan_records(records: list[Article], archive_path: Path) -> dict[str, dict]:
+    """Preview how each record will affect the archive, without writing."""
+    if not archive_path.exists():
+        return {a.path.name: {"action": "new", "fields": ()} for a in records}
+    data = json.loads(archive_path.read_text(encoding="utf-8"))
+    plan: dict[str, dict] = {}
+    for article in records:
+        section = find_section(data, article)
+        existing = find_article(section, article) if section else None
+        if existing is None:
+            plan[article.path.name] = {"action": "new", "fields": ()}
+            continue
+        updates = planned_updates(article, existing)
+        plan[article.path.name] = {
+            "action": "update" if updates else "unchanged",
+            "fields": tuple(sorted(updates)),
+        }
+    return plan
+
+
+def preview(records: list[Article], plan: dict[str, dict] | None = None) -> int:
     """Print exactly what would be published; return the warning count.
 
     Printed as full-width blocks rather than a table: the point of the gate is
@@ -384,6 +545,15 @@ def preview(records: list[Article]) -> int:
             if warnings
             else "[green]ok[/green]"
         )
+        entry = (plan or {}).get(article.path.name, {})
+        action = entry.get("action", "new")
+        fields = entry.get("fields", ())
+        if action == "new":
+            action_text = "[green]add to archive[/green]"
+        elif action == "update":
+            action_text = f"[cyan]update archive: {', '.join(fields)}[/cyan]"
+        else:
+            action_text = "[dim]archive already current[/dim]"
         console.print(
             f"\n[bold cyan]{index}. {article.path.name}[/bold cyan]\n"
             f"   issue   : {article.year}/Volume {article.volume}/"
@@ -391,10 +561,20 @@ def preview(records: list[Article]) -> int:
             f"   title   : {article.title or '[red]<empty>[/red]'}\n"
             f"   authors : {article.authors or '[red]<none>[/red]'}\n"
             f"   abstract: {len(article.abstract)} chars\n"
+            f"   action  : {action_text}\n"
             f"   flags   : {flag_text}"
         )
 
-    console.print(f"\n[cyan]{len(records)} new article(s).[/cyan]")
+    new_count = sum(
+        1 for entry in (plan or {}).values() if entry.get("action") == "new"
+    )
+    update_count = sum(
+        1 for entry in (plan or {}).values() if entry.get("action") == "update"
+    )
+    console.print(
+        f"\n[cyan]{len(records)} article(s): {new_count} new to the archive, "
+        f"{update_count} to update.[/cyan]"
+    )
     if flagged:
         console.print(
             f"[bold yellow]{flagged} of {len(records)} entr(y/ies) have warnings "
@@ -459,8 +639,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    archive_path = args.frontend / "archive-data.json"
     records = collect_articles(args.folder)
-    warning_count = preview(records)
+    plan = plan_records(records, archive_path)
+    warning_count = preview(records, plan)
 
     if args.dry_run:
         console.print(
@@ -474,20 +656,24 @@ def main() -> None:
         return
 
     upload(records, args.env_file)
-    changed = update_archive(
-        records, args.frontend / "archive-data.json"
-    )
+    report = update_archive(records, archive_path)
     abstracts_added = update_abstracts(
         records, args.frontend / "abstracts.json"
     )
-    if changed or abstracts_added:
-        # New papers need a static page, and the sitemap must list it.
+    if report["added"] or report["updated"] or abstracts_added:
+        # New or improved metadata needs its page and the sitemap regenerated.
         run_build(
-            archive=args.frontend / "archive-data.json",
+            archive=archive_path,
             abstracts_path=args.frontend / "abstracts.json",
             out=args.frontend / "article",
         )
-        publish(args.frontend, "Add new journal articles")
+        parts = []
+        if report["added"]:
+            parts.append(f"add {len(report['added'])}")
+        if report["updated"]:
+            parts.append(f"update {len(report['updated'])}")
+        message = f"Journal archive: {', '.join(parts) or 'refresh'}"
+        publish(args.frontend, message)
     else:
         console.print("[yellow]Archive already up to date.[/yellow]")
 

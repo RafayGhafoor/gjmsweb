@@ -54,6 +54,7 @@ from metadata import (
     extract_metadata,
     is_boilerplate,
 )
+import overrides as override_store
 
 console = Console(stderr=True)
 
@@ -194,6 +195,11 @@ def choose_title(
     return kept
 
 
+def article_path_name(article: dict) -> str:
+    """PDF filename for an archive entry, which is the overrides key."""
+    return unquote(urlsplit(str(article.get("pdf") or "")).path).rsplit("/", 1)[-1]
+
+
 def resolve_local(pdf_url: str, corpus: Path) -> Path | None:
     """Map an archive PDF URL to its file in the local mirror."""
     if not pdf_url:
@@ -296,6 +302,10 @@ def main() -> None:
                 progress.update(task, current=targets[index].name[:44])
                 progress.advance(task)
 
+    # Apply hand-corrected metadata last so it always wins over extraction.
+    overrides = override_store.load()
+    applied = 0
+
     # Apply changes in memory.
     abstracts: dict[str, str] = {}
     for index, (_, article) in enumerate(entries):
@@ -305,6 +315,21 @@ def main() -> None:
 
         curated_title = str(article.get("title") or "")
         title, reason = choose_title(curated_title, meta)
+
+        override = override_store.for_file(overrides, article_path_name(article))
+        if override:
+            fields = override_store.apply_to(
+                {"title": title, "authors": meta.authors_text, "abstract": meta.abstract},
+                overrides,
+                article_path_name(article),
+            )
+            title = fields["title"]
+            if override.get("authors"):
+                meta.authors = [override["authors"]]
+            if override.get("abstract"):
+                meta.abstract = override["abstract"]
+            reason = "override"
+            applied += 1
         if reason == "extracted" and title != curated_title:
             summary.titles_extracted += 1
             if len(summary.samples) < args.samples:
@@ -346,6 +371,8 @@ def main() -> None:
     console.print(f"abstracts collected     : {summary.abstracts_added}")
     console.print(f"kept (low confidence)   : {summary.low_confidence}")
     console.print(f"kept (right-to-left)    : {summary.rtl_kept}")
+    if applied:
+        console.print(f"manual overrides applied : [magenta]{applied}[/magenta]")
 
     if summary.samples:
         console.print("\n[bold yellow]─── Sample title replacements ───[/bold yellow]")

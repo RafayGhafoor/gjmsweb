@@ -8,11 +8,32 @@ The `gjms-automation` tools maintain the article archive:
 2. Extract article titles, authors and abstracts from PDF first pages.
 3. **Preview the extracted metadata and confirm** before anything is changed.
 4. Upload new PDFs to Bunny using the existing layout:
-   `year/Volume <volume>/Issue <issue>, <year>/<filename>`.
+   `year/Volume <volume>/Issue <issue>, <year>/<filename>`. A file already on
+   Bunny at the same size is **skipped**, so re-running is cheap and safe.
 5. Update `/Users/emumba/Downloads/projects/gjms-frontend/archive-data.json`
-   (titles/authors) and `abstracts.json` (abstracts, keyed by PDF URL).
+   (titles/authors) and `abstracts.json` (abstracts, keyed by PDF URL). An entry
+   already present is **updated in place** when its metadata changed, which is
+   how re-running applies a better title.
 6. Generate the static per-article pages, `sitemap.xml` and `robots.txt`.
 7. Push the frontend repository to GitHub to publish the changes.
+
+## Manual corrections
+
+Extraction is rebuilt from the PDFs on every run, so a hand correction must be
+recorded somewhere that survives. `gjms-automation/overrides.json` (committed,
+keyed by PDF filename) holds title/author/abstract overrides and is applied
+**last**, after extraction and after the backfill - a human edit always wins.
+
+`slug` is deliberately not overridable: it is the published URL.
+
+Set one with the CLI, which writes the override, updates the JSON, regenerates
+the affected pages and (with `--push`) publishes:
+
+```bash
+python gjms-automation/cli.py set "<pattern>" --title "..." --authors "..."
+python gjms-automation/cli.py clear "<pattern>"     # hand back to extraction
+python gjms-automation/cli.py                       # interactive menu
+```
 
 Step 3 is the safety gate. The original bug was a title that had swallowed the
 author line, affiliations, an email and two ORCIDs (461 characters) and was
@@ -119,6 +140,14 @@ skipped.
 ## Commands
 
 ```bash
+# Interactive menu (publish, browse, edit, clear, pages, backfill, mirror, links).
+python gjms-automation/cli.py
+
+# Correct an article's metadata by hand and keep the correction.
+python gjms-automation/cli.py set "<pattern>" --title "..." --push
+python gjms-automation/cli.py show "<pattern>"
+python gjms-automation/cli.py list "<pattern>"
+
 # Preview extracted metadata, confirm, then upload/update/push.
 python gjms-automation/run_automation.py
 

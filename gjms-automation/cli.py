@@ -1,0 +1,626 @@
+"""One entry point for the GJMS automation and for correcting metadata by hand.
+
+Interactive (rich menus) when run with no command, or non-interactive for
+scripting:
+
+    python gjms-automation/cli.py                  # interactive menu
+    python gjms-automation/cli.py run              # preview -> confirm -> publish
+    python gjms-automation/cli.py preview          # preview only
+    python gjms-automation/cli.py list usman       # find articles
+    python gjms-automation/cli.py show khadija     # inspect one
+    python gjms-automation/cli.py set khadija --title "Corrected Title"
+
+`set` records the correction in `overrides.json`, applies it to the archive
+immediately, regenerates the affected pages, and (with `--push`) publishes. The
+override is applied last on every future run, so extraction can never silently
+undo a hand correction.
+
+Other commands: `clear`, `pages`, `mirror`, `links`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Confirm, IntPrompt, Prompt
+from rich.table import Table
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+import overrides as override_store
+from build_pages import run_build
+
+console = Console(stderr=True)
+FRONTEND = Path("/Users/emumba/Downloads/projects/gjms-frontend")
+
+
+# --------------------------------------------------------------------------- #
+# Small helpers over the archive JSON
+# --------------------------------------------------------------------------- #
+
+
+def archive_path(frontend: Path) -> Path:
+    return frontend / "archive-data.json"
+
+
+def abstracts_path(frontend: Path) -> Path:
+    return frontend / "abstracts.json"
+
+
+def overrides_path() -> Path:
+    return override_store.OVERRIDES_PATH
+
+
+def load_json(path: Path, default):
+    if not path.exists():
+        return default
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def filename_of(article: dict) -> str:
+    return unquote(urlsplit(str(article.get("pdf") or "")).path).rsplit("/", 1)[-1]
+
+
+def iter_articles(data: list[dict]):
+    for issue in data:
+        for article in issue.get("articles", []):
+            yield issue, article
+
+
+def find_matches(data: list[dict], pattern: str) -> list[tuple[dict, dict]]:
+    """Articles whose title, authors, filename or slug contains `pattern`."""
+    needle = pattern.casefold()
+    out = []
+    for issue, article in iter_articles(data):
+        haystack = " ".join(
+            [
+                str(article.get("title") or ""),
+                str(article.get("authors") or ""),
+                filename_of(article),
+                str(article.get("slug") or ""),
+            ]
+        ).casefold()
+        if needle in haystack:
+            out.append((issue, article))
+    return out
+
+
+def describe(issue: dict, article: dict, abstracts: dict) -> str:
+    return (
+        f"  {article.get('num')}. {article.get('title')}\n"
+        f"     issue   : {issue.get('volume')} - {issue.get('title')}\n"
+        f"     authors : {article.get('authors') or '<none>'}\n"
+        f"     pdf     : {filename_of(article)}\n"
+        f"     pages   : {article.get('pages') or '-'}\n"
+        f"     slug    : {article.get('slug') or '-'}\n"
+        f"     abstract: {len(abstracts.get(str(article.get('pdf')), ''))} chars"
+    )
+
+
+def matches_table(matches: list[tuple[dict, dict]], title: str) -> Table:
+    table = Table(title=title, header_style="bold")
+    table.add_column("#", justify="right", max_width=3)
+    table.add_column("vol", max_width=8)
+    table.add_column("title", overflow="fold", max_width=58)
+    table.add_column("authors", overflow="fold", max_width=24)
+    for index, (issue, article) in enumerate(matches, 1):
+        table.add_row(
+            str(index),
+            str(issue.get("volume") or ""),
+            str(article.get("title") or ""),
+            str(article.get("authors") or "[red]<none>[/red]"),
+        )
+    return table
+
+
+# --------------------------------------------------------------------------- #
+# Applying an edit (shared by `set` and the interactive editor)
+# --------------------------------------------------------------------------- #
+
+
+def apply_edit(
+    frontend: Path,
+    targets: list[tuple[dict, dict]],
+    *,
+    title: str | None = None,
+    authors: str | None = None,
+    abstract_text: str | None = None,
+    note: str | None = None,
+    push: bool = False,
+    message: str | None = None,
+) -> int:
+    """Write overrides + archive + abstracts for `targets`, then regenerate pages.
+
+    `None` means "leave alone"; `""` clears the field. Returns the number of
+    fields changed.
+    """
+    data = load_json(archive_path(frontend), [])
+    abstracts = load_json(abstracts_path(frontend), {})
+    overrides = override_store.load()
+
+    # Resolve each target inside the data we are about to write. Mutating the
+    # caller's dicts would look like it worked but change nothing, because those
+    # came from a separate load of the same JSON file.
+    live: list[dict] = []
+    for _, target in targets:
+        url = str(target.get("pdf") or "")
+        found = next(
+            (
+                article
+                for _, article in iter_articles(data)
+                if str(article.get("pdf") or "") == url
+            ),
+            None,
+        )
+        if found is None:
+            console.print(f"[yellow]Not in the archive, skipped: {url}[/yellow]")
+            continue
+        live.append(found)
+
+    changed = 0
+    for article in live:
+        name = filename_of(article)
+        console.print(f"\n[bold cyan]{name}[/bold cyan]")
+
+        if title is not None and article.get("title") != title:
+            console.print(f"  title  : [red]- {article.get('title')}[/red]")
+            console.print(f"           [green]+ {title}[/green]")
+            article["title"] = title
+            changed += 1
+        if authors is not None and article.get("authors") != authors:
+            console.print(f"  authors: [red]- {article.get('authors')}[/red]")
+            console.print(f"           [green]+ {authors}[/green]")
+            article["authors"] = authors
+            changed += 1
+
+        url = str(article.get("pdf") or "")
+        if abstract_text is not None:
+            before = len(abstracts.get(url, ""))
+            if abstract_text == "":
+                if url in abstracts:
+                    console.print(f"  abstract: [red]- {before} chars[/red] [green]+ cleared[/green]")
+                    abstracts.pop(url)
+                    changed += 1
+            elif abstracts.get(url) != abstract_text:
+                console.print(
+                    f"  abstract: [red]- {before} chars[/red] "
+                    f"[green]+ {len(abstract_text)} chars[/green]"
+                )
+                abstracts[url] = abstract_text
+                changed += 1
+
+        overrides = override_store.merge(
+            overrides,
+            name,
+            title=title,
+            authors=authors,
+            abstract=abstract_text,
+            note=note,
+        )
+
+    if not changed:
+        console.print("[yellow]Already up to date; nothing written.[/yellow]")
+        return 0
+
+    if not live:
+        console.print("[red]No matching archive entries; nothing written.[/red]")
+        return 0
+
+    archive_path(frontend).write_text(
+        json.dumps(data, indent=2, ensure_ascii=True) + "\n", encoding="utf-8"
+    )
+    abstracts_path(frontend).write_text(
+        json.dumps(abstracts, indent=1, ensure_ascii=True) + "\n", encoding="utf-8"
+    )
+    override_store.save(overrides)
+    console.print(
+        f"[green]Saved {len(live)} article(s) and {overrides_path().name}.[/green]"
+    )
+
+    regenerate(frontend)
+    if push:
+        publish(frontend, message or "Correct article metadata", push=True)
+    else:
+        console.print("[yellow]Not pushed (use --push, or push from the menu).[/yellow]")
+    return changed
+
+
+def regenerate(frontend: Path) -> None:
+    run_build(
+        archive=archive_path(frontend),
+        abstracts_path=abstracts_path(frontend),
+        out=frontend / "article",
+    )
+
+
+def publish(frontend: Path, message: str, push: bool) -> None:
+    """Commit and push through run_automation.publish (pinned deploy key)."""
+    import run_automation
+
+    if not push:
+        console.print("[yellow]Not pushed (pass --push to commit and publish).[/yellow]")
+        return
+    run_automation.publish(frontend, message)
+
+
+def require_single(matches, pattern: str, allow_all: bool):
+    if not matches:
+        console.print(f"[red]No article matches {pattern!r}.[/red]")
+        raise SystemExit(1)
+    if len(matches) > 1 and not allow_all:
+        console.print(
+            f"[yellow]{len(matches)} articles match {pattern!r}; "
+            f"narrow it or pass --all:[/yellow]"
+        )
+        console.print(matches_table(matches, "matches"))
+        raise SystemExit(1)
+    return matches
+
+
+# --------------------------------------------------------------------------- #
+# Interactive mode (rich)
+# --------------------------------------------------------------------------- #
+
+
+def interactive_search(frontend: Path, pattern: str | None = None):
+    """Search, show matches, and let the user pick one. Returns (issue, article)."""
+    data = load_json(archive_path(frontend), [])
+    if not data:
+        console.print(f"[red]No archive at {archive_path(frontend)}.[/red]")
+        return None
+    pattern = pattern or Prompt.ask("\nSearch articles (title/author/filename)")
+    if not pattern.strip():
+        return None
+    matches = find_matches(data, pattern.strip())
+    if not matches:
+        console.print(f"[red]Nothing matches {pattern!r}.[/red]")
+        return None
+    console.print(matches_table(matches, f"{len(matches)} match(es) for {pattern!r}"))
+    if len(matches) == 1:
+        issue, article = matches[0]
+        if Confirm.ask("Use this article?", default=True):
+            return issue, article
+        return None
+    index = IntPrompt.ask("Pick a number (0 to cancel)", default=0)
+    if not 1 <= index <= len(matches):
+        return None
+    return matches[index - 1]
+
+
+def interactive_edit(frontend: Path) -> None:
+    picked = interactive_search(frontend)
+    if not picked:
+        return
+    issue, article = picked
+    abstracts = load_json(abstracts_path(frontend), {})
+    console.print("\n" + describe(issue, article, abstracts))
+
+    console.print("\n[dim]Leave a field blank to keep it as it is.[/dim]")
+    title = Prompt.ask("New title", default="")
+    authors = Prompt.ask("New authors", default="")
+    abstract_text = Prompt.ask(
+        "New abstract (a filename, '-' to clear, blank to keep)", default=""
+    )
+    if abstract_text == "-":
+        abstract_text = ""
+    elif abstract_text and Path(abstract_text).is_file():
+        abstract_text = Path(abstract_text).read_text(encoding="utf-8").strip()
+
+    if not any([title, authors, abstract_text != ""]):
+        console.print("[yellow]Nothing entered; no change.[/yellow]")
+        return
+
+    note = Prompt.ask("Note (why)", default="")
+    push = Confirm.ask("Commit and push after saving?", default=False)
+    apply_edit(
+        frontend,
+        [(issue, article)],
+        title=title or None,
+        authors=authors or None,
+        abstract_text=abstract_text,
+        note=note or None,
+        push=push,
+    )
+
+
+def interactive_clear(frontend: Path) -> None:
+    picked = interactive_search(frontend)
+    if not picked:
+        return
+    _, article = picked
+    name = filename_of(article)
+    overrides = override_store.load()
+    if name not in overrides:
+        console.print(f"[yellow]No override on {name}.[/yellow]")
+        return
+    console.print_json(json.dumps(overrides[name], ensure_ascii=False))
+    if Confirm.ask(f"Remove the override for {name}?", default=False):
+        overrides.pop(name)
+        override_store.save(overrides)
+        console.print(
+            "[green]Cleared.[/green] Run a backfill to restore extracted values."
+        )
+
+
+def interactive_menu(frontend: Path) -> None:
+    actions = [
+        ("Publish (preview -> confirm -> push)", "run"),
+        ("Browse / search articles", "browse"),
+        ("Edit an article's metadata", "edit"),
+        ("Clear a manual override", "clear"),
+        ("Regenerate article pages", "pages"),
+        ("Run a backfill over the whole archive", "backfill"),
+        ("Mirror Bunny locally", "mirror"),
+        ("Verify archive PDF links", "links"),
+        ("Quit", "quit"),
+    ]
+    while True:
+        table = Table(title="GJMS automation", show_header=False, box=None, padding=(0, 2))
+        table.add_column("n", justify="right", style="cyan", no_wrap=True)
+        table.add_column("action")
+        for index, (label, _) in enumerate(actions, 1):
+            table.add_row(str(index), label)
+        console.print(Panel(table, border_style="cyan", subtitle="interactive"))
+
+        choice = IntPrompt.ask("Choice", default=len(actions))
+        if not 1 <= choice <= len(actions):
+            continue
+        action = actions[choice - 1][1]
+
+        if action == "quit":
+            return
+        console.rule(action)
+        if action == "run":
+            cmd_run(argparse.Namespace(
+                folder=Path("test_files"), frontend=frontend, env_file=None,
+                dry_run=False, yes=False,
+            ))
+        elif action == "browse":
+            data = load_json(archive_path(frontend), [])
+            pattern = Prompt.ask("Filter (blank = all)", default="")
+            rows = find_matches(data, pattern) if pattern else list(iter_articles(data))
+            console.print(matches_table(rows, f"{len(rows)} article(s)"))
+        elif action == "edit":
+            interactive_edit(frontend)
+        elif action == "clear":
+            interactive_clear(frontend)
+        elif action == "pages":
+            cmd_pages(argparse.Namespace(frontend=frontend, push=False, message=None))
+        elif action == "backfill":
+            _delegate("backfill_archive.py", ["--dry-run"] if Confirm.ask(
+                "Preview only (--dry-run)?", default=True) else [])
+        elif action == "mirror":
+            cmd_mirror(argparse.Namespace(passthrough=[]))
+        elif action == "links":
+            cmd_links(argparse.Namespace(passthrough=[]))
+        console.print()
+        if not Confirm.ask("Back to the menu?", default=True):
+            return
+
+
+# --------------------------------------------------------------------------- #
+# Non-interactive commands
+# --------------------------------------------------------------------------- #
+
+
+def cmd_run(args) -> None:
+    import run_automation
+
+    argv = [str(args.folder)] if args.folder else []
+    if args.frontend != FRONTEND:
+        argv += ["--frontend", str(args.frontend)]
+    if args.env_file:
+        argv += ["--env-file", str(args.env_file)]
+    if args.dry_run:
+        argv.append("--dry-run")
+    if args.yes:
+        argv.append("--yes")
+    old = sys.argv
+    sys.argv = ["run_automation.py"] + argv
+    try:
+        run_automation.main()
+    finally:
+        sys.argv = old
+
+
+def cmd_preview(args) -> None:
+    args.dry_run = True
+    cmd_run(args)
+
+
+def cmd_list(args) -> None:
+    data = load_json(archive_path(args.frontend), [])
+    rows = find_matches(data, args.pattern) if args.pattern else list(iter_articles(data))
+    console.print(matches_table(rows[: args.limit], f"{len(rows)} article(s)"))
+    if len(rows) > args.limit:
+        console.print(f"[dim]... {len(rows) - args.limit} more (raise --limit)[/dim]")
+
+
+def cmd_show(args) -> None:
+    data = load_json(archive_path(args.frontend), [])
+    abstracts = load_json(abstracts_path(args.frontend), {})
+    overrides = override_store.load()
+    matches = find_matches(data, args.pattern)
+    if not matches:
+        console.print(f"[red]No article matches {args.pattern!r}.[/red]")
+        raise SystemExit(1)
+    for issue, article in matches:
+        console.print("\n" + describe(issue, article, abstracts))
+        entry = override_store.for_file(overrides, filename_of(article))
+        if entry:
+            console.print(f"     [magenta]override: {entry}[/magenta]")
+
+
+def cmd_set(args) -> None:
+    data = load_json(archive_path(args.frontend), [])
+    matches = require_single(find_matches(data, args.pattern), args.pattern, args.all)
+
+    abstract_text = args.abstract
+    if args.abstract_file:
+        abstract_text = Path(args.abstract_file).read_text(encoding="utf-8").strip()
+    if args.abstract == "-":
+        abstract_text = ""
+    if not any([args.title, args.authors, abstract_text is not None]):
+        console.print("[red]Nothing to set: pass --title, --authors or --abstract.[/red]")
+        raise SystemExit(1)
+
+    apply_edit(
+        args.frontend,
+        matches,
+        title=args.title,
+        authors=args.authors,
+        abstract_text=abstract_text,
+        note=args.note,
+        push=args.push,
+        message=args.message,
+    )
+
+
+def cmd_clear(args) -> None:
+    data = load_json(archive_path(args.frontend), [])
+    matches = require_single(find_matches(data, args.pattern), args.pattern, args.all)
+    overrides = override_store.load()
+    removed = 0
+    for _, article in matches:
+        name = filename_of(article)
+        if name in overrides:
+            overrides.pop(name)
+            removed += 1
+            console.print(f"[yellow]Cleared override for[/yellow] {name}")
+    if not removed:
+        console.print("[yellow]No override to clear.[/yellow]")
+        return
+    override_store.save(overrides)
+    console.print(
+        "[green]Overrides cleared.[/green] Re-run [bold]backfill[/bold] or "
+        "[bold]run[/bold] to restore the extracted values."
+    )
+
+
+def cmd_pages(args) -> None:
+    regenerate(args.frontend)
+    publish(args.frontend, args.message or "Regenerate article pages", args.push)
+
+
+def cmd_menu(args) -> None:
+    interactive_menu(args.frontend)
+
+
+def cmd_mirror(args) -> None:
+    _delegate("download_bunny.py", args.passthrough)
+
+
+def cmd_links(args) -> None:
+    _delegate("verify_links.py", args.passthrough)
+
+
+def _delegate(script: str, passthrough: list[str]) -> None:
+    """Run another gjms-automation script, keeping its own CLI and progress."""
+    subprocess.run([sys.executable, str(HERE / script), *passthrough], check=True)
+
+
+# --------------------------------------------------------------------------- #
+# Argument parsing
+# --------------------------------------------------------------------------- #
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gjms",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    def add_common(p):
+        p.add_argument("--frontend", type=Path, default=FRONTEND, help="frontend repo path")
+        p.add_argument("--push", action="store_true", help="commit and push after changing files")
+        p.add_argument("--message", help="commit message")
+
+    menu = sub.add_parser("menu", aliases=["i"], help="interactive menu (default)")
+    menu.add_argument("--frontend", type=Path, default=FRONTEND)
+    menu.set_defaults(func=cmd_menu)
+
+    run = sub.add_parser("run", help="preview, confirm, then publish")
+    run.add_argument("folder", nargs="?", type=Path, default=Path("test_files"))
+    run.add_argument("--dry-run", action="store_true")
+    run.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    run.add_argument("--frontend", type=Path, default=FRONTEND)
+    run.add_argument("--env-file", type=Path)
+    run.set_defaults(func=cmd_run)
+
+    preview = sub.add_parser("preview", help="preview only; change nothing")
+    preview.add_argument("folder", nargs="?", type=Path, default=Path("test_files"))
+    preview.add_argument("--yes", action="store_true")
+    preview.add_argument("--frontend", type=Path, default=FRONTEND)
+    preview.add_argument("--env-file", type=Path)
+    preview.set_defaults(func=cmd_preview, dry_run=True)
+
+    lst = sub.add_parser("list", help="list archive articles")
+    lst.add_argument("pattern", nargs="?")
+    lst.add_argument("--limit", type=int, default=40)
+    lst.add_argument("--frontend", type=Path, default=FRONTEND)
+    lst.set_defaults(func=cmd_list)
+
+    show = sub.add_parser("show", help="show an article's metadata")
+    show.add_argument("pattern")
+    show.add_argument("--frontend", type=Path, default=FRONTEND)
+    show.set_defaults(func=cmd_show)
+
+    setp = sub.add_parser("set", help="correct title/authors/abstract and keep it")
+    setp.add_argument("pattern", help="title, author, filename or slug substring")
+    setp.add_argument("--title")
+    setp.add_argument("--authors")
+    setp.add_argument("--abstract", help="new abstract text, or '-' to clear")
+    setp.add_argument("--abstract-file", type=Path)
+    setp.add_argument("--note", help="why this was corrected")
+    setp.add_argument("--all", action="store_true", help="apply to every match")
+    add_common(setp)
+    setp.set_defaults(func=cmd_set)
+
+    clear = sub.add_parser("clear", help="drop an override")
+    clear.add_argument("pattern")
+    clear.add_argument("--all", action="store_true")
+    clear.add_argument("--frontend", type=Path, default=FRONTEND)
+    clear.set_defaults(func=cmd_clear)
+
+    pages = sub.add_parser("pages", help="regenerate article pages/sitemap/robots")
+    add_common(pages)
+    pages.set_defaults(func=cmd_pages)
+
+    mirror = sub.add_parser("mirror", help="mirror Bunny locally")
+    mirror.add_argument("passthrough", nargs=argparse.REMAINDER)
+    mirror.set_defaults(func=cmd_mirror)
+
+    links = sub.add_parser("links", help="verify archive PDF links")
+    links.add_argument("passthrough", nargs=argparse.REMAINDER)
+    links.set_defaults(func=cmd_links)
+
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    # No command: interactive when there is a terminal, help otherwise (never
+    # block a script or a pipe waiting for input).
+    if not getattr(args, "command", None):
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            interactive_menu(FRONTEND)
+        else:
+            parser.print_help()
+        return
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
