@@ -36,6 +36,15 @@ import shutil
 import sys
 from pathlib import Path
 
+# Cosmetic oddities in a name that are reported but never rewritten: a person's
+# name is theirs to spell.
+COSMETIC = [
+    (re.compile(r"\b[a-z]{3,}\b"), "lowercase word in a name"),
+    (re.compile(r"\b(prof|dr|mr|mrs|ms)\s*[;:]", re.I), "honorific with ':' or ';'"),
+    (re.compile(r"\b(prof\.?\s*){2,}", re.I), "doubled honorific"),
+    (re.compile(r"[a-z]\.$"), "trailing period on a name"),
+]
+
 DEFAULT_ARCHIVE = Path("/Users/emumba/Downloads/projects/gjms-frontend/archive-data.json")
 
 # "Title … - Author Name" / "Title … -Author Name" (space after the dash varies).
@@ -144,6 +153,7 @@ def main() -> int:
     title_fixes: list[tuple[str, str, str, str]] = []
     author_fixes: list[tuple[str, str, str]] = []
     review: list[tuple[str, str, str]] = []
+    cosmetic: list[tuple[str, str, str]] = []
 
     for article in articles:
         title = (article.get("title") or "").strip()
@@ -161,6 +171,12 @@ def main() -> int:
                 review.append((article.get("slug", ""), title, authors))
             continue
 
+        for segment in (s.strip() for s in clean_authors(authors).split(",")):
+            for pattern, description in COSMETIC:
+                if segment and pattern.search(segment):
+                    cosmetic.append((segment, description, article.get("title", "")))
+                    break
+
         cleaned = clean_authors(authors)
         if cleaned != authors:
             if not cleaned:
@@ -173,7 +189,8 @@ def main() -> int:
     total = len(articles)
     print(f"archive: {args.archive}")
     print(f"records: {total}  ·  author suffix moved out of the title: {len(title_fixes)}"
-          f"  ·  debris trimmed from authors: {len(author_fixes)}  ·  needs a human: {len(review)}\n")
+          f"  ·  debris trimmed from authors: {len(author_fixes)}  ·  needs a human: {len(review)}"
+          f"  ·  cosmetic only: {len(cosmetic)}\n")
 
     if title_fixes:
         print("1) title carried the author — the name moves into `authors`, the title loses the suffix")
@@ -195,8 +212,13 @@ def main() -> int:
             print(f"   authors : {authors or '(empty)'}")
             print(f"   title   : {title}\n")
 
+    if cosmetic:
+        print("4) cosmetic only — reported, never rewritten (the journal's call)")
+        for segment, description, title in cosmetic:
+            print(f"   {segment[:60]:62s} {description}")
+
     if args.dry_run:
-        print("dry run: nothing written. Re-run without --dry-run to apply.")
+        print("\ndry run: nothing written. Re-run without --dry-run to apply.")
         return 0
 
     backup = args.archive.with_suffix(".json.bak")
