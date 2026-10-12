@@ -115,6 +115,20 @@ python gjms-automation/repair_authors.py             # apply, keeping a .bak
 
 It is idempotent and safe to re-run after an extraction pass.
 
+The 35 records it repaired are also recorded in `gjms-automation/overrides.json`,
+so the next extraction run cannot reintroduce the debris: overrides are applied
+last and a hand correction wins. Re-applying those overrides to the pre-repair
+values reproduces the repaired archive exactly.
+
+That override pass also exposed two shapes worth a check of their own, because
+`ambiguous_keys()` reports them but nothing acts on them:
+
+| Filename | What it means |
+| --- | --- |
+| `Sonia Hassan paper.pdf` | **the same URL twice with two different titles** — one record's PDF link is wrong, so that article's "Download PDF" serves a different paper |
+| `Zaheer Hussain paper.pdf` | the **same article recorded in two issues** (Vol 5 No. 4, 2019 and Vol 6 No. 1, 2020), titles differing only in capitalisation — either a duplicate record or duplicate publication |
+| `Author Guideline.docx` ×2 | expected: the front-matter entries |
+
 ## Static pages and SEO
 
 The frontend is a **SvelteKit app** (`gjms-frontend`) that `@sveltejs/adapter-static`
