@@ -120,21 +120,23 @@ so the next extraction run cannot reintroduce the debris: overrides are applied
 last and a hand correction wins. Re-applying those overrides to the pre-repair
 values reproduces the repaired archive exactly.
 
-That override pass also exposed two shapes worth a check of their own, because
-`ambiguous_keys()` reports them but nothing acts on them:
+That override pass also exposed duplicate filenames, which `ambiguous_keys()`
+reports but nothing acts on. All three were settled by reading the PDFs — the
+titles alone could not distinguish them:
 
-| Filename | What it means |
+| Filename | Resolution |
 | --- | --- |
-| `Sonia Hassan paper.pdf` | **the same URL twice with two different titles** — one record's PDF link is wrong, so that article's "Download PDF" serves a different paper |
-| `Zaheer Hussain paper.pdf` | the **same article recorded in two issues** (Vol 5 No. 4, 2019 and Vol 6 No. 1, 2020), titles differing only in capitalisation — either a duplicate record or duplicate publication |
-| `Author Guideline.docx` ×2 | expected: the front-matter entries |
+| `Sonia Hassan paper.pdf` | two records shared one URL while carrying different titles. The file is *"Factors Affecting Internet Banking Usage"*, so the other record's link was **cleared** (its own PDF is not in the corpus, and its page range does fit the issue, so the record itself is real) |
+| `Zaheer Hussain paper.pdf` | a genuine **duplicate publication**: identical title, authors, abstract and keywords; the 2020 file is merely renumbered (`Vol 6 (1) … pp.184-.203`, still *"Paper received: 15.07.2019"*). The Vol 5 No. 4 (2019) record is the original, kept; the 2020 record was **removed**, with a redirect page preserving its URL |
+| `Author Guideline.docx` ×2 | expected: the front-matter entries. One of them had a `pdf` pointing at the *directory* rather than a file, now corrected |
 
 ## Static pages and SEO
 
 The frontend is a **SvelteKit app** (`gjms-frontend`) that `@sveltejs/adapter-static`
 prerenders into `build/`; the deploy workflow runs `npm ci && npm run build` and
 publishes only `build/`. It generates `article/<slug>.html` from `archive-data.json`
-and emits its own `sitemap.xml` (401 URLs), `robots.txt`, `llms.txt` and 404 page.
+and emits its own `sitemap.xml` (400 URLs — 9 pages, 50 issues, 341 articles; the
+count follows the archive), `robots.txt`, `llms.txt` and a 404 page.
 
 The automation supplies **data only**: `archive-data.json` (titles/authors) and
 `abstracts.json` (abstracts keyed by PDF URL). The data layer in
@@ -157,6 +159,18 @@ site. `run_automation.py` no longer calls it, and those generated files have bee
 **deleted from the frontend repository entirely** (344 files) — they were a second
 source for one set of URLs and the build already produces them. Recoverable from
 frontend history at `6681dff` if the flat-HTML layer is ever needed again.
+
+## Journal front matter is a content source
+
+The 2016 issue directories on Bunny carry the journal's published front matter:
+`Author Guideline.docx`, `Editor's Note.docx`, `Publishing Ethics.docx`,
+`Scope.docx`, `Table of contents .docx` and `Vision, Scope and publishing
+Ethics.docx`. Reading those files is how the site's **publication-ethics and
+scope pages** should be written — that text exists and was published, so it is a
+source to quote, not a gap to fill in by writing new policy.
+
+`Publishing Ethics.docx` is not a `Publication Ethics.pdf`; the old flat-HTML site
+linked a PDF of that name that is not in the repository.
 
 ## Live progress requirement
 
