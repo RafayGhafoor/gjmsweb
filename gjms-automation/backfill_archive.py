@@ -122,10 +122,15 @@ def curated_is_broken(title: str) -> bool:
 
     This is the case the user originally reported: Khadija Shaheen's title had
     the author line, affiliations, emails and ORCIDs appended (461 characters).
+    Journal furniture counts as broken too -- the backfill ran before the
+    extractor learned to drop "Original Article", so one live entry still reads
+    "Original Article Rural/Urban Migration and Wage Determination".
     """
     if not title or not title.strip():
         return True
     if len(title) > 220:
+        return True
+    if is_boilerplate(title):
         return True
     low = title.casefold()
     return any(marker in low for marker in BROKEN_MARKERS)

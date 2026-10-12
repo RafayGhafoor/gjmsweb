@@ -59,7 +59,12 @@ AFFILIATION_WORDS = (
 # The lookbehind requires a lowercase letter directly before the marker so that
 # acronym/technical tokens keep their digits: "CO2" must not become "CO".
 SUPERSCRIPT = re.compile(r"(?<=[a-z])\s*[\d*†‡§¶#]{1,3}(?=[.,;]|\s|$)")
-MARKER_AFTER_NAME = re.compile(r"\b[A-Z][a-z]+\s*[\d*†‡§¶#]{1,3}\b")
+MARKER_AFTER_NAME = re.compile(
+    # Trailing \b fails when the marker is followed by punctuation ("Ayoub*,"),
+    # so require whitespace/punctuation/end instead. The lowercase run after the
+    # capital keeps technical tokens intact: "CO2" is not a name marker.
+    r"\b[A-Z][a-z]+\s*[\d*†‡§¶#]{1,3}(?=[\s,.;:)]|$)"
+)
 
 # A title line sometimes swallows the author line because the PDF put both on
 # one line, e.g. "PROBLEMS OF SMALL FIRMS OPERATING IN PAKISTAN. Prof.Dr.
@@ -68,12 +73,14 @@ MARKER_AFTER_NAME = re.compile(r"\b[A-Z][a-z]+\s*[\d*†‡§¶#]{1,3}\b")
 # Ghafoor Awan2"), so splitting blindly at "Prof." truncates it into a
 # fragment that then gets absorbed into the title.
 EMBEDDED_AUTHOR = re.compile(
+    # Honorific after a sentence end: "... PROPHET. Prof.Dr. Abdul Ghafoor Awan."
     r"(?<=[.)])\s+(?=(?:Prof|Dr|Mr|Mrs|Ms|Miss|Engr|Adv)\.?\s*[A-Z][a-z])"
 )
 
 # Page furniture that is never the title.
 BOILERPLATE = re.compile(
-    r"global journal|issn|impact factor|www\.|doi\s*[:.]|\bresearch article\b"
+    r"global journal|issn|impact factor|www\.|doi\s*[:.]"
+    r"|\b(?:research|original|review)\s+article\b"
     r"|open access|creative commons|all rights reserved|this is an open access"
     r"|figshare|orcid|^\s*@\s*\d{4}|^\s*\d{1,4}\s*$|^\s*[_-]{6,}\s*$"
     r"|^\s*\.{4,}\s*$|^\s*(vol\.?|volume)\s*\d+|pp\.\s*\d|https?://"
@@ -213,10 +220,31 @@ def clean_inline(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+HONORIFIC_SET = frozenset(h.rstrip(".").casefold() for h in HONORIFICS)
+
+
+def rejoin_spaced_honorifics(text: str) -> str:
+    """Rejoin honorifics/names the PDF split as "D r." / "P rof." / "H afiz".
+
+    Without this, "D r. H afiz" contributes the lowercase fragments "r" and
+    "afiz" as if they were function words, which makes looks_like_author_line
+    reject a real author line. Only rejoins when the result IS a known
+    honorific, so "A study" is left alone.
+    """
+
+    def repl(match: re.Match) -> str:
+        first, rest, dot = match.group(1), match.group(2), match.group(3)
+        if (first + rest).casefold() in HONORIFIC_SET:
+            return first + rest + dot
+        return match.group(0)
+
+    return re.sub(r"\b([A-Z])\s+([A-Za-z]{1,6})(\.?)", repl, text)
+
+
 def clean_line(value: str) -> str:
     """Collapse whitespace inside a single line (keeps lines separate)."""
     text = (value or "").replace("\u00a0", " ")
-    return re.sub(r"\s+", " ", text).strip()
+    return rejoin_spaced_honorifics(re.sub(r"\s+", " ", text).strip())
 
 
 def walk(node, out):
@@ -351,6 +379,27 @@ def looks_like_names(text: str) -> bool:
     return bool(re.search(r"[A-Za-z]", text))
 
 
+def _is_name_fragment(text: str) -> bool:
+    """True for a bare name fragment, e.g. an author name the PDF wrapped.
+
+    Sobia Suleman's author block extracts as three lines: "Muhammad" /
+    "Tariq Ayoub*, Sobia Suleman**, Anees-ul Hassan***," / ... so the first
+    fragment must be absorbed into the author region instead of the title.
+    ALL CAPS is title style, not a name fragment.
+    """
+    if not text or len(text) > 40:
+        return False
+    if has_rtl(text) or is_boilerplate(text) or looks_like_affiliation(text):
+        return False
+    if text.isupper():
+        return False
+    words = text.split()
+    if not 1 <= len(words) <= 3:
+        return False
+    bare = [w.strip(".,;:()[]*†‡§¶") for w in words]
+    return not any(w and w[0].islower() for w in bare)
+
+
 def looks_like_author_line(text: str, following: str | None = None) -> bool:
     """True when a line is a list of author names rather than prose.
 
@@ -470,6 +519,21 @@ def _title_candidates(
         ):
             break
         candidates.append(line)
+
+    if author_index is None and candidates:
+        # No author line was found, so the author block may be glued to the title
+        # (Ismail: title at 14.04pt, then "Muhammad Ismail," / "MS/M.Phil in
+        # Business Administration" at 12.0pt). Titles use the largest font on the
+        # page, so cut at the first significant drop. Scoped to this path so the
+        # 290-odd papers with a detected author line are untouched.
+        peak = max(candidate.size for candidate in candidates)
+        trimmed: list[Line] = []
+        for candidate in candidates:
+            if trimmed and peak and candidate.size < peak * 0.9:
+                break
+            trimmed.append(candidate)
+        candidates = trimmed
+
     return candidates, page_has_rtl
 
 
@@ -548,7 +612,30 @@ def from_nodes(nodes: list[dict]) -> ArticleMetadata | None:
         None,
     )
 
-    candidates, block_has_rtl = _title_candidates(lines, author_index, abstract_index)
+    # Absorb preceding wrapped name fragments into the author region so they are
+    # not swallowed by the title (e.g. Sobia Suleman's lone "Muhammad" line).
+    # Gated on font size: the fragment must be set in the author's smaller font,
+    # otherwise a genuine one-word title line such as "Analysis" is stolen.
+    author_start = author_index
+    if author_start is not None:
+        author_size = lines[author_start].size
+        title_size = max(
+            (
+                line.size
+                for line in lines[:author_start]
+                if not is_boilerplate(line.text) and not has_rtl(line.text)
+            ),
+            default=0.0,
+        )
+        while (
+            author_start > 0
+            and _is_name_fragment(lines[author_start - 1].text)
+            and lines[author_start - 1].size <= author_size
+            and lines[author_start - 1].size < title_size
+        ):
+            author_start -= 1
+
+    candidates, block_has_rtl = _title_candidates(lines, author_start, abstract_index)
     if candidates:
         title, confidence = " ".join(c.text for c in candidates), "high"
     elif block_has_rtl or page_rtl:
@@ -565,14 +652,14 @@ def from_nodes(nodes: list[dict]) -> ArticleMetadata | None:
     rtl = not title and (block_has_rtl or page_rtl)
 
     authors: list[str] = []
-    if author_index is not None:
+    if author_start is not None:
         # The detected author line is trusted as-is. Additional lines in the
         # author region may hold more names (this journal often prints the Dean
         # first and the lead author on the following line), but they are gated
         # because they usually carry affiliation text.
-        authors = split_authors(lines[author_index].text)
+        authors = split_authors(lines[author_start].text)
         region_end = abstract_index if abstract_index is not None else len(lines)
-        for line in lines[author_index + 1: region_end]:
+        for line in lines[author_start + 1: region_end]:
             name_text = strip_affiliation_tail(line.text)
             if not looks_like_names(name_text):
                 continue
