@@ -9,7 +9,10 @@ archive. The canonical automation scripts are in `gjms-automation/`.
 - Frontend repository: `/Users/emumba/Downloads/projects/gjms-frontend`
 - New PDFs waiting for processing: `test_files/`
 - Local Bunny mirror: `bunny-content/` (ignored by Git)
-- Frontend archive data: `../gjms-frontend/archive-data.json`
+- Frontend archive data: `../gjms-frontend/archive-data.json` (titles/authors)
+- Frontend abstracts: `../gjms-frontend/abstracts.json` (abstracts, keyed by PDF URL)
+- Generated article pages: `../gjms-frontend/article/<slug>.html`, plus
+  `sitemap.xml` and `robots.txt`
 
 ## Required tools
 
@@ -56,19 +59,34 @@ when uploading and in the Bunny URL.
 
 ### 2. Extract and review metadata
 
+Metadata extraction lives in `gjms-automation/metadata.py`. It reads
+OpenDataLoader's structured JSON (not just its plain text) because heading
+levels are not trustworthy across volumes; it walks the node tree for order and
+font size, then applies layout rules per line. It returns the title, authors,
+abstract and affiliations plus `confidence` and `rtl` flags.
+
+**Reviewing happens in `run_automation.py`, which previews before it changes
+anything** (see step 6). To inspect extraction alone:
+
 ```bash
-python gjms-automation/extract_articles.py test_files
+python gjms-automation/run_automation.py --dry-run
 ```
 
 The extractor:
 
-- Uses OpenDataLoader for first-page text.
-- Runs up to 16 PDFs concurrently.
-- Shows Rich live progress.
-- Uses OCR only when extracted text is empty.
-- Handles current and older GJMS page layouts.
-- Converts titles to title case.
-- Fails explicitly instead of inventing metadata.
+- Uses OpenDataLoader structured JSON for first-page content.
+- Runs up to 16 PDFs concurrently, each with its own temporary directory.
+- Shows Rich live progress naming the current file.
+- Uses OCR only when OpenDataLoader returns no text (scanned PDFs).
+- Handles current and older GJMS page layouts, including merged nodes such as
+  `"Research Article\n<title line 1>\n<title line 2>"`.
+- Keeps the titled casing the PDF itself uses, and never publishes a title whose
+  `confidence` is not `high`.
+- Leaves the title empty for right-to-left (Urdu) pages, where no Latin title
+  exists on the page, so the curated archive title is kept.
+
+`extract_articles.py` remains the legacy plain-text parser and is still used for
+reading the issue metadata and page range.
 
 Review title, authors, page range, volume, issue, and year before publishing.
 
@@ -93,14 +111,10 @@ before rerunning.
 
 ### 5. Update the frontend archive
 
-Edit:
+`run_automation.py` does this automatically. It writes two files:
 
-```text
-/Users/emumba/Downloads/projects/gjms-frontend/archive-data.json
-```
-
-Each issue is an object with `volume`, `title`, and `articles`. Recent entries
-use this article shape:
+**`archive-data.json`** — each issue is an object with `volume`, `title`, and
+`articles`. Recent entries use this article shape:
 
 ```json
 {
@@ -108,9 +122,18 @@ use this article shape:
   "title": "Title Case Article Title",
   "authors": "Author One, Author Two",
   "pages": "1-25",
-  "pdf": "http://gjms.b-cdn.net/2025/Volume 11/Issue 3, 2025/article.pdf"
+  "pdf": "http://gjms.b-cdn.net/2025/Volume 11/Issue 3, 2025/article.pdf",
+  "slug": "title-case-article-title-1a2b3c4"
 }
 ```
+
+**`abstracts.json`** — a flat map of PDF URL to abstract text. Abstracts are kept
+out of `archive-data.json` so the archive page stays light; it lazy-loads them
+on click.
+
+The `slug` is the article's published URL (`article/<slug>.html`). It is persisted
+and only ever assigned when missing, so correcting a title later cannot change a
+already-published URL. Do not hand-edit it.
 
 Preserve the existing field names and URL convention. Validate the JSON:
 
@@ -121,25 +144,28 @@ python -m json.tool /Users/emumba/Downloads/projects/gjms-frontend/archive-data.
 ### 6. Commit and publish
 
 ```bash
-cd /Users/emumba/Downloads/projects/gjms-frontend
-git diff -- archive-data.json
-git add archive-data.json
-git commit -m "Add journal archive entries"
-git push origin main
-```
-
-Pushing `main` publishes the frontend through its existing GitHub deployment.
-
-For the normal automated workflow, use one command instead:
-
-```bash
 python gjms-automation/run_automation.py
 ```
 
-It processes PDFs concurrently, uploads them to Bunny, updates the correct
-top-level archive issue, commits the JSON, and pushes `main`. Use
-`--dry-run` to preview metadata and destinations without changing Bunny or
-GitHub.
+It processes PDFs concurrently, previews the extracted metadata, asks for
+confirmation, then uploads to Bunny, updates both JSON files, regenerates the
+static article pages, commits and pushes `main`.
+
+The preview is the safety gate. The original bug was a title that had swallowed
+the author line, affiliations, an email and two ORCIDs (461 characters) and was
+published with nobody looking at it. So every new article's title, authors and
+abstract length is printed with warning flags (low confidence, RTL page,
+missing authors/abstract, over-long title) before anything changes:
+
+* clean run -> type `y`
+* any warnings -> must type `publish`
+* not a terminal -> refuses unless `--yes` is passed
+
+Use `--dry-run` to preview and stop, or `--yes` for unattended runs.
+
+For a manual publish, the files to stage are `archive-data.json`,
+`abstracts.json`, `sitemap.xml`, `robots.txt` and `article/` — not just the JSON.
+Pushing `main` publishes the frontend through its existing GitHub deployment.
 
 To verify all archive PDF links without downloading complete PDFs:
 
@@ -150,6 +176,56 @@ python gjms-automation/verify_links.py
 The checker encodes spaces and other path characters, uses concurrent HEAD
 requests, and falls back to a one-byte ranged request when HEAD is unsupported.
 If Bunny rate-limits requests, run it with `--workers 1 --delay 1`.
+
+## Repairing existing archive entries
+
+`backfill_archive.py` is a one-off repair pass over the whole archive (whereas
+`run_automation.py` only handles newly uploaded PDFs):
+
+```bash
+python gjms-automation/backfill_archive.py --dry-run
+python gjms-automation/backfill_archive.py
+```
+
+It fills authors and abstracts, strips the legacy `"Title - Author Name"` suffix
+out of titles, and replaces a title only when the curated one is unusable (it
+contains authors, emails, ORCIDs, journal furniture such as "Original Article",
+or exceeds 220 characters) or when the extraction is a strict superset of it.
+Anything with low confidence, a right-to-left page, or no local PDF is left
+untouched.
+
+## Static pages and search engines
+
+`build_pages.py` generates `article/<slug>.html` for every article plus
+`sitemap.xml` and `robots.txt`:
+
+```bash
+python gjms-automation/build_pages.py --dry-run
+python gjms-automation/build_pages.py
+```
+
+This exists because `archive.html` builds its article list **in JavaScript,
+inside a modal, only after a click**. Search engines do not click, so that page
+exposes no titles, authors, abstracts or PDF links. The static pages are the
+indexable surface: real HTML with the abstract inline, `ScholarlyArticle`
+JSON-LD, a meta description, a canonical URL and `citation_*` meta tags. The
+archive modal still lazy-loads from `abstracts.json` to stay light.
+
+After deploying, submit `https://gjmsweb.com/sitemap.xml` to Google Search
+Console — a new sitemap is not discovered on its own.
+
+## Measuring extraction accuracy
+
+`scripts/` holds read-only analysis tools; see `scripts/README.md`. They score
+title extraction against the curated archive titles (`IDENTICAL to curated` is
+the headline metric) and can dump a PDF's OpenDataLoader node tree when one
+extracts wrongly. They never touch Bunny or GitHub.
+
+The realistic ceiling is around 80%, not 100%: most remaining differences are
+the curated title being truncated, the PDF containing publisher typos, or a
+pure-Urdu paper whose English title does not exist on the page. A VLM hybrid was
+tested and rejected — read `scripts/README.md` before re-attempting any
+model-based extraction.
 
 ## Refreshing the Bunny mirror
 
@@ -191,6 +267,8 @@ The mirror is for auditing and parser development; it is not committed.
 ## Documentation contracts
 
 `agents.md` records the durable workflow rules for AI agents. This guide is the
-human-readable operational reference. Any future long-running command must
-retain live progress, concurrency where appropriate, and explicit failure
-reporting.
+human-readable operational reference. `scripts/README.md` documents the accuracy
+harness and its metric caveats; `gjms-automation/README.md` is the tool index;
+`gjms-frontend/CLAUDE.md` describes the website. Any future long-running command
+must retain live progress (naming the current file), concurrency where
+appropriate, and explicit failure reporting.
