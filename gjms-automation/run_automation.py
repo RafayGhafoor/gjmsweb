@@ -15,8 +15,11 @@ from urllib.parse import quote, unquote
 
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
+from titlecase import titlecase
 
-from extract_articles import extract_first_page_text, parse_article
+from extract_articles import extract_first_page_text
+from metadata import extract_metadata
+from build_pages import run_build
 from upload_articles import (
     article_destination,
     ensure_directory,
@@ -56,6 +59,7 @@ class Article:
     title: str
     authors: str
     pages: str
+    abstract: str = ""
 
     @property
     def remote_path(self) -> str:
@@ -70,15 +74,28 @@ class Article:
 
 
 def parse_one(path: Path) -> Article:
+    # Title/authors/abstract come from the structure-aware extractor; the raw
+    # first-page text is still needed for the issue metadata and page range.
+    meta = extract_metadata(path)
     with tempfile.TemporaryDirectory(prefix="opendataloader-") as temporary_dir:
         text = extract_first_page_text(path, Path(temporary_dir))
-    title, authors = parse_article(text, fallback_author=path.stem)
     year, volume, issue = article_destination(text)
     match = PAGE_PATTERN.search(re.sub(r"\s+", " ", text))
     if not match:
         raise ValueError(f"Could not determine page range for {path}")
     pages = re.sub(r"\s+", "", match.group(1)).replace("–", "-")
-    return Article(path, year, volume, issue, title, ", ".join(authors), pages)
+    title = meta.title.strip()
+    if not title:
+        # Never publish a silently wrong title (that was the original bug): fall
+        # back loudly to the filename so a human notices.
+        title = titlecase(path.stem.split(" paper")[0].strip())
+        console.print(
+            f"[yellow]{path.name}: no title extracted; "
+            f"using filename {title!r}[/yellow]"
+        )
+    return Article(
+        path, year, volume, issue, title, meta.authors_text, pages, meta.abstract
+    )
 
 
 def collect_articles(folder: Path) -> list[Article]:
@@ -93,16 +110,18 @@ def collect_articles(folder: Path) -> list[Article]:
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TextColumn("{task.completed}/{task.total}"),
+            TextColumn("[cyan]{task.fields[current]:<44}[/cyan]"),
             TimeRemainingColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task("Processing new PDFs", total=len(futures))
+            task = progress.add_task("Processing new PDFs", total=len(futures), current="")
             for future in as_completed(futures):
                 path = futures[future]
                 try:
                     records.append(future.result())
                 except Exception as error:
                     failures.append((path, error))
+                progress.update(task, current=path.name[:44])
                 progress.advance(task)
     for path, error in failures:
         console.print(f"[red]Failed: {path}: {error}[/red]")
@@ -122,13 +141,36 @@ def upload(records: list[Article], env_file: Path) -> None:
         ftp.login(os.environ["BUNNY_FTP_USERNAME"], os.environ["BUNNY_FTP_PASSWORD"])
         ftp.set_pasv(os.environ.get("BUNNY_FTP_PASSIVE", "true").casefold() == "true")
         root = ftp.pwd()
+        uploaded_bytes = 0
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TextColumn("[cyan]{task.fields[current]:<40}[/cyan]"),
+            TextColumn("{task.fields[bytes]:>10}"),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                "Uploading to Bunny", total=len(records), current="", bytes="0 B"
+            )
+            for article in records:
+                ftp.cwd(root)
+                ensure_directory(ftp, article.year)
+                ensure_directory(ftp, f"Volume {article.volume}")
+                ensure_directory(ftp, f"Issue {article.issue}, {article.year}")
+                with article.path.open("rb") as file_handle:
+                    ftp.storbinary(f"STOR {article.path.name}", file_handle)
+                uploaded_bytes += article.path.stat().st_size
+                progress.update(
+                    task,
+                    current=article.path.name[:40],
+                    bytes=f"{uploaded_bytes / 1024 / 1024:.1f} MB",
+                )
+                progress.advance(task)
+
+        # Printed after the bar so the summary does not interleave with it.
         for article in records:
-            ftp.cwd(root)
-            ensure_directory(ftp, article.year)
-            ensure_directory(ftp, f"Volume {article.volume}")
-            ensure_directory(ftp, f"Issue {article.issue}, {article.year}")
-            with article.path.open("rb") as file_handle:
-                ftp.storbinary(f"STOR {article.path.name}", file_handle)
             console.print(f"[green]Uploaded:[/green] {article.remote_path}")
 
 
@@ -200,8 +242,43 @@ def git_env() -> dict[str, str]:
     return env
 
 
+def update_abstracts(records: list[Article], abstracts_path: Path) -> int:
+    """Merge newly extracted abstracts into abstracts.json.
+
+    Abstracts live in a separate file because the archive page lazy-loads them;
+    the static article pages carry them inline for search engines.
+    """
+    existing: dict[str, str] = {}
+    if abstracts_path.exists():
+        existing = json.loads(abstracts_path.read_text(encoding="utf-8"))
+    added = 0
+    for article in records:
+        if article.abstract and existing.get(article.public_url) != article.abstract:
+            existing[article.public_url] = article.abstract
+            added += 1
+    if added:
+        abstracts_path.write_text(
+            json.dumps(existing, indent=1, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+        console.print(f"[green]Abstracts added:[/green] {added}")
+    return added
+
+
 def publish(frontend: Path, message: str) -> None:
-    subprocess.run(["git", "add", "archive-data.json"], cwd=frontend, check=True)
+    subprocess.run(
+        [
+            "git",
+            "add",
+            "archive-data.json",
+            "abstracts.json",
+            "sitemap.xml",
+            "robots.txt",
+            "article",
+        ],
+        cwd=frontend,
+        check=True,
+    )
     status = subprocess.run(
         ["git", "diff", "--cached", "--quiet"],
         cwd=frontend,
@@ -264,7 +341,16 @@ def main() -> None:
     changed = update_archive(
         records, args.frontend / "archive-data.json"
     )
-    if changed:
+    abstracts_added = update_abstracts(
+        records, args.frontend / "abstracts.json"
+    )
+    if changed or abstracts_added:
+        # New papers need a static page, and the sitemap must list it.
+        run_build(
+            archive=args.frontend / "archive-data.json",
+            abstracts_path=args.frontend / "abstracts.json",
+            out=args.frontend / "article",
+        )
         publish(args.frontend, "Add new journal articles")
     else:
         console.print("[yellow]Archive already up to date.[/yellow]")
