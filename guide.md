@@ -11,8 +11,9 @@ archive. The canonical automation scripts are in `gjms-automation/`.
 - Local Bunny mirror: `bunny-content/` (ignored by Git)
 - Frontend archive data: `../gjms-frontend/archive-data.json` (titles/authors)
 - Frontend abstracts: `../gjms-frontend/abstracts.json` (abstracts, keyed by PDF URL)
-- Generated article pages: `../gjms-frontend/article/<slug>.html`, plus
-  `sitemap.xml` and `robots.txt`
+- Generated article pages, `sitemap.xml` and `robots.txt`: produced by the
+  frontend's own SvelteKit build into `../gjms-frontend/build/`. The automation
+  does not write pages — only `archive-data.json` and `abstracts.json`.
 
 ## Required tools
 
@@ -198,8 +199,9 @@ missing authors/abstract, over-long title) before anything changes:
 
 Use `--dry-run` to preview and stop, or `--yes` for unattended runs.
 
-For a manual publish, the files to stage are `archive-data.json`,
-`abstracts.json`, `sitemap.xml`, `robots.txt` and `article/` — not just the JSON.
+For a manual publish, the files to stage are `archive-data.json` and
+`abstracts.json`. Page generation, `sitemap.xml` and `robots.txt` belong to the
+frontend build, so there is nothing else for this repository to commit.
 Pushing `main` publishes the frontend through its existing GitHub deployment.
 
 To verify all archive PDF links without downloading complete PDFs:

@@ -58,7 +58,8 @@ correction. `slug` is not overridable - it is the published URL.
 | `download_bunny.py` | Mirror the whole Bunny tree into `bunny-content/` |
 | `upload_articles.py` | Upload PDFs to Bunny only, skipping those already present |
 | `backfill_archive.py` | One-off repair pass over every archive entry |
-| `build_pages.py` | **Legacy** page generator for the pre-SvelteKit site; no longer called || `extract_articles.py` | Legacy metadata parser; still used for issue and page range |
+| `build_pages.py` | **Legacy** page generator for the pre-SvelteKit site; no longer called, and its output was deleted from the frontend repository |
+| `repair_authors.py` | Repair authors/titles in `archive-data.json` (author suffix in the title, affiliation/degree debris in `authors`) || `extract_articles.py` | Legacy metadata parser; still used for issue and page range |
 | `verify_links.py` | Check every archive PDF link (HEAD, ranged GET fallback) |
 
 ## What this repo owns
@@ -83,10 +84,10 @@ python gjms-automation/upload_articles.py
 python gjms-automation/backfill_archive.py --dry-run
 python gjms-automation/backfill_archive.py
 
-# Legacy page generator for the pre-SvelteKit site. Not called by anything;
-# the SvelteKit build prerenders article pages from archive-data.json.
-python gjms-automation/build_pages.py --dry-run
-python gjms-automation/build_pages.py
+# Repair author metadata in the frontend archive (preview first; keeps a .bak).
+# Fixes an author left in the title and institution/degree text inside `authors`.
+python gjms-automation/repair_authors.py --dry-run
+python gjms-automation/repair_authors.py
 
 # Verify every frontend PDF link without downloading complete files.
 python gjms-automation/verify_links.py

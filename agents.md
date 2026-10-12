@@ -48,6 +48,16 @@ refuses to continue unless the operator approves:
 * any warnings -> must type `publish`
 * not a terminal -> refuses unless `--yes` is passed
 
+Two further failure modes are known and deserve a flag of their own, because the
+current flags do not catch either: an **author line that swallowed the
+affiliation block** (`"… , 1.Macquarie, 2.Bahauddin Zakariya"`, `"… , UAF
+Sub-Campus Burewala-Vehari, Huda Farooq, Research Officer"`) and a **title that
+still carries the author suffix** (`"… Economic Growth - Muhammad Awais"` with an
+empty `authors` field). Thirty-five records had one or the other; both are
+repaired by `gjms-automation/repair_authors.py`, described below. A cheap test for
+the first is "does `authors` contain a digit or an institution word?" — that is
+exactly what that script keys on.
+
 Step 7 needs the deploy key `~/.ssh/id_rsa_rafayghafoor`: there is no active
 `Host github.com` block in `~/.ssh/config`, and this machine's ssh binary
 compiles in a non-standard default port, so an unpinned `git push` fails with
@@ -82,6 +92,29 @@ the curated title being truncated or the PDF containing publisher typos. Read
 Live progress must name the current file: use a Rich progress column bound to
 `task.fields[current]`, as `extract_articles.py` does.
 
+## Author metadata repair
+
+`gjms-automation/repair_authors.py` fixes two shapes that extraction cannot
+recover on its own, using only what the records already contain:
+
+* an author appended to the title with an empty `authors` field — the same
+  `" - Author Name"` convention `scripts/evaluate_metadata_accuracy.py` already
+  strips in `reference_core()` when scoring, applied here to the data itself;
+* affiliation, role and degree segments inside `authors` (`1.Macquarie`,
+  `UAF Sub-Campus Burewala-Vehari`, `Research Officer`, `1.MS`, `Ph. D`).
+
+Place names are only removed as part of an address run, so `"Burewala Campus,
+Vehari"` goes while a lone token that happens to match a city is left alone.
+Cosmetic spelling of a person's name (a lowercase surname, `Prof:`, a doubled
+honorific) is reported but never rewritten — that is the journal's call.
+
+```bash
+python gjms-automation/repair_authors.py --dry-run   # print every proposed change
+python gjms-automation/repair_authors.py             # apply, keeping a .bak
+```
+
+It is idempotent and safe to re-run after an extraction pass.
+
 ## Static pages and SEO
 
 The frontend is a **SvelteKit app** (`gjms-frontend`) that `@sveltejs/adapter-static`
@@ -106,8 +139,10 @@ have silently stopped new articles from getting a page.
 
 `gjms-automation/build_pages.py` wrote a parallel set of `article/*.html`,
 `sitemap.xml` and `robots.txt` at the repository root for the previous flat-HTML
-site. Those are **not deployed** and are now legacy: two sources for one set of
-URLs would drift. `run_automation.py` no longer calls it.
+site. `run_automation.py` no longer calls it, and those generated files have been
+**deleted from the frontend repository entirely** (344 files) — they were a second
+source for one set of URLs and the build already produces them. Recoverable from
+frontend history at `6681dff` if the flat-HTML layer is ever needed again.
 
 ## Live progress requirement
 
@@ -172,10 +207,9 @@ python gjms-automation/upload_articles.py --dry-run
 # Upload PDFs from test_files.
 python gjms-automation/upload_articles.py
 
-# LEGACY: the page generator for the pre-SvelteKit site, not called by anything.
-# The website's build prerenders article pages from archive-data.json.
-python gjms-automation/build_pages.py --dry-run
-python gjms-automation/build_pages.py
+# Repair author metadata in the frontend archive (preview, then apply).
+python gjms-automation/repair_authors.py --dry-run
+python gjms-automation/repair_authors.py
 ```
 
 Analysis and validation tooling lives in `scripts/` (read-only; it never touches
