@@ -149,36 +149,71 @@ metadata is empty or journal boilerplate.
 
 Tested `thatdamai/moondream-1.8b` via Ollama (and, for comparison,
 `richardyoung/olmocr2:7b-q8` and `maternion/LightOnOCR-2`). **Do not re-attempt
-this** - it regresses accuracy badly. Evidence, measured on
-`Khadija Shaheen Paper.pdf`, whose true title the layout extractor already
-reproduces at similarity 1.000:
+this** - it regresses accuracy. Two rounds of testing:
+
+**Round 1 - as shipped, the model is unusable:**
 
 | Invocation | Result | Similarity to true title |
 | --- | --- | --- |
 | "Read the title of this paper." | empty in 0.1s | 0.000 |
 | "Extract the title verbatim." | empty | 0.000 |
-| "Describe this image." (the only prompt that works) | `Unpacking the Growth with Puzzle in Pakistan: The Roles of Technology Export and Population` | **0.459** |
-| same at 3x resolution | dropped more words | **0.350** |
+| "Describe this image." (the only prompt that works) | drops words | 0.459 |
 
-Three specific traps:
+Cause: the upstream Modelfile is `TEMPLATE """{{ if .Prompt }} Question:
+{{ .Prompt }}\n\n{{ end }} Answer: {{ .Response }}"""` **and declares `stop
+"Question:"`**, so any prompt that makes the model echo it halts immediately.
+`/api/chat` behaves identically. More resolution made it worse (0.459 -> 0.350
+at 3x).
 
-1. **The Modelfile template is `Question: {{ .Prompt }}\n\nAnswer:` and
-   `"Question:"` is a stop token.** Any prompt that makes the model echo it
-   halts generation immediately, so every read/extract prompt returns an empty
-   string. `/api/chat` behaves identically.
-2. **The one working prompt *captions*, it does not transcribe.** It invented
-   "with", turned "Exports" into "Export", and dropped "Renewable Energy, FDI,
-   Inflation and" entirely.
-3. **More resolution made it worse** (0.459 -> 0.350 at 3x).
+**Round 2 - with the Modelfile fixed, it still cannot transcribe.** The blocker
+above is packaging, so it was fixed to give the model its best shot:
 
-Note also that OpenDataLoader's own `--hybrid` flag is **not** pluggable to an
+```
+FROM thatdamai/moondream-1.8b:latest
+TEMPLATE """{{ .Prompt }}"""          # raw template
+PARAMETER temperature 0
+PARAMETER stop "<|endoftext|>"        # the "Question:" stop is removed
+```
+
+VQA then works (no more empty responses), best prompt
+`"Question: Transcribe the title text exactly. Answer:"`:
+
+true title: `Unpacking the Growth Puzzle in Pakistan: The Roles of Technology
+Exports, Renewable Energy, FDI, Inflation and Population`
+
+answer: `Unpacking the Growth **with** Puzzle in Pakistan: The Roles of
+Technology Export and Population` -> **0.821**
+
+It invents "with", turns "Exports" into "Export", and silently **drops
+"Renewable Energy, FDI, Inflation and"**. The layout extractor scores **1.000**
+on the same page.
+
+**A/B on the subset a fallback would actually target** (confidence != high),
+best prompt, 90s per-request timeout:
+
+| Outcome | Count | What the model returned |
+| --- | --- | --- |
+| extractor better | 4 | `0.99-1.00` vs `0.55-0.92` |
+| "moondream better" | 4 | **all spurious** - see below |
+
+The four apparent wins are all RTL pages where the extractor *correctly* returns
+nothing and moondream returned the journal header
+(`"Global Journal of Management, Social Sciences and Humanities"`),
+`"Al-Jazeera.com/GlobalJournalOfManagementSocial SciencesAndHumanities"`, or a
+caption hallucination (`'A page of paper with a red border and black text,
+titled "A Page of Paper"'`). Their 0.14-0.38 scores are coincidental token
+overlap, not titles.
+
+> **Scoring trap:** a naive "pick whichever scores higher by >0.05" rule counts
+> those four as improvements and would ship this. Any future VLM comparison must
+> check *what* was returned, not just the score.
+
+Also note OpenDataLoader's own `--hybrid` flag is **not** pluggable to an
 arbitrary model: it accepts only `docling-fast` and needs its own backend server
 (`opendataloader-pdf[hybrid]`), so a moondream hybrid cannot be wired through it.
 
-On the 13 Urdu pages a VLM cannot help either: it captioned the journal *header*
-(`"titled Global Journal of Management Social Sciences and Humanities"`) and
-asserted the title was "written in Arabic script". The information is not on the
-page.
+On the 13 Urdu pages no VLM can help: the English title does not exist on the
+page (verified line by line), and the model merely captions the header.
 
 ## Corpus location
 
