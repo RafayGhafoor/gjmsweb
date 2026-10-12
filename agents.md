@@ -6,14 +6,26 @@ The `gjms-automation` tools maintain the article archive:
 
 1. Download the complete Bunny Storage FTP tree into `bunny-content/`.
 2. Extract article titles, authors and abstracts from PDF first pages.
-3. Upload new PDFs to Bunny using the existing layout:
+3. **Preview the extracted metadata and confirm** before anything is changed.
+4. Upload new PDFs to Bunny using the existing layout:
    `year/Volume <volume>/Issue <issue>, <year>/<filename>`.
-4. Update `/Users/emumba/Downloads/projects/gjms-frontend/archive-data.json`
+5. Update `/Users/emumba/Downloads/projects/gjms-frontend/archive-data.json`
    (titles/authors) and `abstracts.json` (abstracts, keyed by PDF URL).
-5. Generate the static per-article pages, `sitemap.xml` and `robots.txt`.
-6. Push the frontend repository to GitHub to publish the changes.
+6. Generate the static per-article pages, `sitemap.xml` and `robots.txt`.
+7. Push the frontend repository to GitHub to publish the changes.
 
-Step 6 needs the deploy key `~/.ssh/id_rsa_rafayghafoor`: there is no active
+Step 3 is the safety gate. The original bug was a title that had swallowed the
+author line, affiliations, an email and two ORCIDs (461 characters) and was
+published with nobody looking at the metadata. `run_automation.py` therefore
+prints every new article's title, authors and abstract length with warning flags
+(low confidence, RTL page, missing authors/abstract, over-long title) and
+refuses to continue unless the operator approves:
+
+* clean run -> type `y`
+* any warnings -> must type `publish`
+* not a terminal -> refuses unless `--yes` is passed
+
+Step 7 needs the deploy key `~/.ssh/id_rsa_rafayghafoor`: there is no active
 `Host github.com` block in `~/.ssh/config`, and this machine's ssh binary
 compiles in a non-standard default port, so an unpinned `git push` fails with
 `Permission denied (publickey)`. `run_automation.py` sets `GIT_SSH_COMMAND` to
@@ -107,11 +119,14 @@ skipped.
 ## Commands
 
 ```bash
-# Run the complete process: extract, upload, update frontend JSON, commit, push.
+# Preview extracted metadata, confirm, then upload/update/push.
 python gjms-automation/run_automation.py
 
-# Preview the complete process without changing Bunny or GitHub.
+# Preview only: prints metadata + warnings, changes nothing.
 python gjms-automation/run_automation.py --dry-run
+
+# Skip the confirmation prompt (unattended runs only).
+python gjms-automation/run_automation.py --yes
 
 # Mirror all Bunny content locally.
 python gjms-automation/download_bunny.py
